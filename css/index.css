@@ -1,0 +1,1395 @@
+/* Bloombine — petal-ring association game. Soft meadow theme. */
+
+:root {
+    --bg: #1a1b2e;
+    --bg-soft: #2f8d3f;
+    --surface: #2a2c50;
+    --surface-elev: #3b3e6c;
+    --line: rgba(255, 255, 255, 0.10);
+
+    --text: #f6f1e3;
+    --text-muted: rgba(246, 241, 227, 0.7);
+
+    --primary: #2ecc71;
+    --primary-dark: #1e8449;
+    --primary-glow: rgba(46, 204, 113, 0.45);
+
+    --accent: #f1c40f;
+    --accent-2: #ec87c0;     /* pink */
+    --accent-3: #9b59b6;     /* purple */
+    --accent-4: #3498db;     /* blue */
+    --warn: #e74c3c;
+    --ok: #2ecc71;
+
+    /* Topbar gradient — dark green → light green */
+    --topbar-grad: linear-gradient(90deg, #1e4d29 0%, #2f8d3f 25%, #6bcf6b 60%, #a8e6a3 100%);
+
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-display: 'Georgia', 'Times New Roman', serif;
+
+    --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.25);
+    --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 14px 42px rgba(0, 0, 0, 0.5);
+    --glow-accent: 0 0 16px rgba(241, 196, 15, 0.45);
+
+    --radius: 14px;
+    --radius-sm: 8px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+    height: 100%;
+    /* Neither html nor body scrolls — #app-root is the single scroll container.
+       This keeps #topbar truly locked on mobile (no jumping when the URL bar
+       collapses, no horizontal drift when the play area overflows). */
+    overflow: hidden;
+}
+body {
+    font-family: var(--font);
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+}
+
+body {
+    background:
+        radial-gradient(ellipse at 80% 5%, rgba(255, 255, 255, 0.55), transparent 55%),
+        linear-gradient(180deg, #ffffff 0%, #f3f9ee 28%, #d8edcb 55%, #b2dfa2 78%, #8fd185 100%);
+    background-attachment: fixed;
+    height: 100dvh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ---- topbar (locked at top of viewport, fancy gradient) ---- */
+/* Body is the non-scrolling flex container; #topbar is its first child and
+   stays put because #app-root (the second child) is the only scroll area. */
+#topbar {
+    position: relative;
+    z-index: 50;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0.8rem;
+    /* Fixed height keeps the bar identical on all screens, whether the
+       right-side action area is empty (setup) or holds buttons (create). */
+    height: 2.2rem;
+    min-height: 2.2rem;
+    color: #fff;
+    background: var(--topbar-grad);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+#topbar::before {
+    /* subtle moving sheen */
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,0.16), transparent 65%);
+    mix-blend-mode: overlay;
+}
+#topbar-back { display: flex; align-items: center; }
+#topbar-back:empty { display: none; }
+#topbar-left { display: flex; align-items: center; gap: 0.5rem; }
+.topbar-logo { width: 18px; height: 18px; }
+#topbar-title {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    color: #fff;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+#topbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+/* Padding only applies to non-icon buttons (text buttons like Play). Icon
+   buttons keep padding:0 from .btn.icon — the #topbar-right ID selector here
+   was previously overriding that. */
+#topbar-right .btn:not(.icon) { padding: 0.2rem 0.7rem; font-size: 0.8rem; }
+.btn.icon {
+    width: 1.6rem;
+    height: 1.6rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn.icon svg {
+    display: block;
+    width: 1rem;
+    height: 1rem;
+}
+/* Info & Share icons in the topbar — frame-less, icon nearly fills the button. */
+.btn.icon.info-btn,
+.btn.icon.share-btn {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    color: #fff;
+}
+@media (hover: hover) {
+    .btn.icon.info-btn:hover,
+    .btn.icon.share-btn:hover {
+        background: rgba(255,255,255,0.18);
+    }
+}
+.btn.icon.info-btn:disabled,
+.btn.icon.share-btn:disabled {
+    opacity: 0.5;
+}
+.btn.icon.share-btn svg {
+    width: 100%;
+    height: 100%;
+}
+.btn.icon.info-btn svg {
+    width: 100%;
+    height: 100%;
+}
+
+/* ---- main / panels ---- */
+#app-root {
+    flex: 1;
+    min-height: 0;        /* allow flex child to shrink and own its own scroll */
+    overflow: auto;       /* the ONLY scrolling element in the page */
+    padding: 1.2rem 1rem 3rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2rem;
+    /* Full viewport width so the scrollbar lives at the viewport's right
+       edge — previously max-width:1100px + margin:auto centred #app-root,
+       which on wider screens put the scrollbar inside the centred column
+       instead of at the screen edge. Inner content (panels, play-area)
+       has its own max-width and remains centred via `align-items: center`. */
+    width: 100%;
+    /* IMPORTANT: zoom is applied to the CONTENTS (.play-area / .flower-board)
+       below, NOT to #app-root itself. If we zoomed #app-root, the scroll
+       container's own bounding box would scale: at <100 % the scrollbar
+       would move inward (away from the viewport edge) and at >100 % it
+       would move outside the visible area (unreachable for horizontal
+       scrolling). Leaving #app-root at its natural size keeps the
+       scrollbar at the viewport edge and lets it scroll the (zoomed)
+       children naturally. */
+}
+
+.panel {
+    width: 100%;
+    max-width: 520px;
+    background: var(--topbar-grad);
+    color: #fff;
+    border: 1px solid #1e4d29;
+    border-radius: var(--radius);
+    padding: 2rem 1.6rem;
+    box-shadow: var(--shadow-md), 0 0 18px rgba(46, 204, 113, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+}
+.panel .title,
+.panel .subtitle,
+.panel .field > span {
+    color: #fff;
+}
+.panel .subtitle,
+.panel .field > span {
+    opacity: 0.85;
+}
+/* Controls inside the start panel are 50% opaque so the gradient shows through. */
+.panel .stepper,
+.panel .field select,
+.panel .rules {
+    background: rgba(47, 141, 63, 0.5);
+}
+/* Start button: solid dark green with white label, distinct from the topbar
+   Play button (which keeps the bright-green primary look). */
+.panel .btn.primary {
+    background: #1e4d29;
+    color: #fff;
+    border-color: #133018;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+.panel .btn.primary:hover:not(:disabled) {
+    background: #2a6b3a;
+}
+
+.title {
+    font-family: var(--font-display);
+    font-size: 2.2rem;
+    text-align: center;
+}
+.subtitle {
+    text-align: center;
+    color: var(--text-muted);
+    margin-top: -0.6rem;
+}
+
+.form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.4rem;
+}
+.field {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+}
+.field > span {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+.field select {
+    width: auto;
+    min-width: 12rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    font: inherit;
+    outline: none;
+    text-align: center;
+    text-align-last: center;
+}
+.field select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+
+/* ---- stepper (+/− only) ---- */
+.stepper {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0.3rem;
+    width: max-content;
+}
+.step-btn {
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.5);
+    color: #1e4d29;
+    font-size: 1.3rem;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.15s, transform 0.05s;
+}
+.step-btn:hover { background: rgba(255, 255, 255, 0.8); }
+.step-btn:active { transform: translateY(1px); }
+.step-value {
+    min-width: 2.5rem;
+    text-align: center;
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+.rules {
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 0.9rem;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+}
+.rules-title {
+    font-weight: 700;
+    color: var(--text);
+    font-family: var(--font-display);
+}
+.rules p { margin-top: 0.4rem; line-height: 1.45; }
+
+/* ---- buttons ---- */
+.btn {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: var(--surface-elev);
+    color: var(--text);
+    padding: 0.6rem 1rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 500;
+    transition: background 0.15s, transform 0.05s, border-color 0.15s;
+}
+/* Hover styles only on devices that have a real hovering pointer. On touch
+   devices :hover sticks after a tap (no mouseout fires), which made our
+   white zoom buttons turn grey and stay grey until the next pointer event. */
+@media (hover: hover) {
+    .btn:hover:not(:disabled) { background: #44615a; }
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn.primary {
+    background: var(--primary);
+    color: #0d2a1a;
+    border-color: var(--primary-dark);
+    font-weight: 600;
+}
+@media (hover: hover) {
+    .btn.primary:hover:not(:disabled) { background: #46d885; }
+}
+.btn.danger {
+    background: var(--warn);
+    color: #fff;
+    border-color: #8e2a20;
+    font-weight: 600;
+}
+@media (hover: hover) {
+    .btn.danger:hover:not(:disabled) { background: #ec5e51; }
+}
+.btn.ghost { background: transparent; }
+.btn.big { padding: 0.8rem 1.2rem; font-size: 1.05rem; }
+
+/* ---- screen header / footer ---- */
+.screen-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--line);
+}
+.screen-header h2 {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+}
+.screen-header .spacer { flex: 1; }
+
+.screen-footer {
+    width: 100%;
+    display: flex;
+    gap: 0.6rem;
+    justify-content: flex-end;
+    margin-top: 0.6rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--line);
+}
+
+.subheader {
+    width: 100%;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 0.4rem;
+}
+
+
+/* ============================================================
+   Flower board — SVG background + HTML overlays
+   ============================================================ */
+.flower-board {
+    position: relative;
+    margin: 1.2rem auto 1.4rem;
+    flex-shrink: 0;
+    overflow: visible;
+}
+/* On the create screen the flower-board is the zoom container (no
+   .play-area wrapper). */
+body[data-screen="create"] .flower-board {
+    zoom: var(--play-zoom, 1);
+}
+.flower-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* ---- flower slot (sits over each petal's diamond zone) ---- */
+.flower-slot {
+    position: absolute;
+    --slot-d: 25%;
+    --slot-angle: 0deg;
+    width: var(--slot-d);
+    aspect-ratio: 1 / 1;
+    transform: translate(-50%, -50%) rotate(var(--slot-angle));
+    transform-origin: 50% 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Above the play-area petal-cards (z = id+1, typically 1..13) so a
+       free-floating card in the tray can't visually cover up a slot. The
+       lifted/dragged card (z = 100) and the clue badges (z = 1000) stay on
+       top — they're set high enough to clear this. */
+    z-index: 50;
+}
+.slot-drop {
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    border: 2px dashed transparent; /* the SVG draws the dashed slot outline */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+}
+.flower-slot.drag-over .slot-drop {
+    border-color: var(--primary);
+    background: rgba(46, 204, 113, 0.10);
+}
+.slot-label { display: none; }
+.slot-drop:not(:empty) ~ .slot-label { display: none; }
+.flower-slot:has(.petal-card) .slot-label { display: none; }
+
+/* ---- petal card = diamond ---- */
+.petal-card {
+    --petal-fill: #f1c40f;
+    --petal-dark: #c79a07;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    user-select: none;
+    -webkit-user-select: none;
+    /* Establish a containment context so child sizes (esp. .petal-word) can
+       scale with the card via cqw, regardless of whether the card sits in
+       the tray (fixed px size) or a slot (% of board). */
+    container-type: inline-size;
+}
+/* When standalone (in tray, not in slot), pick a comfortable size */
+.petal-tray .petal-card {
+    width: 140px;
+    height: 140px;
+    flex-shrink: 0;
+}
+.petal-card[draggable="true"] { cursor: grab; }
+.petal-card[draggable="true"]:active { cursor: grabbing; }
+.petal-card.dragging { opacity: 0.45; }
+.petal-card.selected .diamond-body { outline: 3px solid var(--accent); outline-offset: 2px; }
+.petal-card.correct .diamond-body { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.35); }
+.petal-card.wrong   .diamond-body { border-color: var(--warn); box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.35); }
+.petal-card.decoy   .diamond-body { border-style: dashed; opacity: 0.85; }
+
+.diamond-body {
+    position: absolute;
+    /* Diamond fills the card; the WHOLE card is sized smaller (via slotDiagonal's
+       shrink factor) so it fits inside the petal.
+       The big white border IS the surface the petal-words sit on. The inside
+       is transparent, so the petal colour beneath shows through. */
+    inset: 14%;
+    z-index: 1;
+    /* Solid petal colour. */
+    background: var(--petal-fill);
+    border: 16.5cqw solid #fff;
+    border-radius: 8px;
+    transform: rotate(45deg);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Word labels — one per diamond edge. Box runs ALONG the edge (rotated ±45°);
+   text inside is rotated 0° or 180° (the `--text-flip-*` var, computed per slot)
+   so it always reads upright wherever the petal sits in the ring. */
+.petal-word {
+    position: absolute;
+    z-index: 2;
+    width: 48%;
+    /* Sizes scale with the card (1cqw = 1% of card width) so the words are
+       as large as they can be for any N. */
+    min-height: 11cqw;
+    padding: 1cqw 4cqw;
+    /* Text sits directly on the diamond's white border — no own background/frame. */
+    background: transparent;
+    color: #111;
+    border: none;
+    border-radius: 0;
+    font-size: clamp(0.65rem, 10cqw, 1.4rem);
+    font-weight: 700;
+    line-height: 1.1;
+    text-align: center;
+    /* Single-line — JS shrinks the font-size when the word would overflow. */
+    white-space: nowrap;
+    overflow: hidden;
+    pointer-events: none;
+    box-shadow: none;
+    transform-origin: 50% 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+/* Each word box sits centred on the white border that runs along the diamond's
+   outer edges (between the outer perimeter ≈24% and the colour-fill at ≈32%). */
+/* Each word's box rotates ±45° to sit ALONG the diamond edge (parallel to it).
+   `--text-flip-*` adds 0° or 180° so the text reads left-to-right no matter
+   which way the card has been rotated in the ring. Both vars are set on the
+   card itself (or inherited from the slot it sits in), so the rotation never
+   changes when the card moves between containers. */
+.petal-word-tl {
+    top: 30%; left: 30%;
+    transform: translate(-50%, -50%) rotate(-45deg) rotate(var(--text-flip-tl, 0deg));
+}
+.petal-word-tr {
+    top: 30%; left: 70%;
+    transform: translate(-50%, -50%) rotate(45deg)  rotate(var(--text-flip-tr, 0deg));
+}
+.petal-word-br {
+    top: 70%; left: 70%;
+    transform: translate(-50%, -50%) rotate(-45deg) rotate(var(--text-flip-br, 0deg));
+}
+.petal-word-bl {
+    top: 70%; left: 30%;
+    transform: translate(-50%, -50%) rotate(45deg)  rotate(var(--text-flip-bl, 0deg));
+}
+/* Mid-spin flip during click-rotation animation: which two cells need a +180°
+   text rotation so that, at the end of the +90° card spin, their text matches
+   the rotation of the cell the word will land in after the content cycles.
+   - Uniform flips around the diamond (slots at 0° / 180° of the ring) → TR & BL.
+   - Alternating flips (every other slot)                             → TL & BR. */
+.petal-card.rot-flip-trbl .petal-word-tr {
+    transform: translate(-50%, -50%) rotate(45deg) rotate(calc(var(--text-flip-tr, 0deg) + 180deg));
+}
+.petal-card.rot-flip-trbl .petal-word-bl {
+    transform: translate(-50%, -50%) rotate(45deg) rotate(calc(var(--text-flip-bl, 0deg) + 180deg));
+}
+.petal-card.rot-flip-tlbr .petal-word-tl {
+    transform: translate(-50%, -50%) rotate(-45deg) rotate(calc(var(--text-flip-tl, 0deg) + 180deg));
+}
+.petal-card.rot-flip-tlbr .petal-word-br {
+    transform: translate(-50%, -50%) rotate(-45deg) rotate(calc(var(--text-flip-br, 0deg) + 180deg));
+}
+
+/* Per user preference: petal id badge + rotate-button are hidden — clicking the
+   card rotates it instead. */
+.petal-center { display: none; }
+
+/* Subtle rotate-icon overlay so the player knows the card is rotatable.
+   Rotates with the slot (no counter-rotation), hidden when the card is locked. */
+.petal-rotate-icon {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 18%;
+    aspect-ratio: 1 / 1;
+    transform: translate(-50%, -50%);
+    color: #000;
+    pointer-events: none;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.petal-rotate-icon svg { width: 100%; height: 100%; }
+.petal-card.locked .petal-rotate-icon { display: none; }
+
+/* Lock overlay shown on a locked petal-card. Counter-rotates against the
+   slot's --slot-angle so the lock always reads upright regardless of where
+   the card is in the ring. */
+.petal-lock {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%) rotate(calc(-1 * var(--slot-angle, 0deg)));
+    width: 32%;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 50%;
+    pointer-events: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    z-index: 5;
+}
+.petal-lock svg {
+    width: 70%;
+    height: 70%;
+}
+.petal-card.locked .diamond-body {
+    filter: saturate(0.7);
+}
+.petal-card.locked {
+    cursor: not-allowed;
+}
+
+/* ============================================================
+   Clue badge — anchored at petal-tip
+   ============================================================ */
+.clue-badge {
+    --boundary-angle: 0deg;
+    /* --badge-scale is inherited from .play-area (set in renderPlay so it
+       scales with flowerSize/zoom). The `1` is the fallback when the badge
+       is rendered outside a play-area context (e.g., create screen). */
+    position: absolute;
+    /* Shared minimum width so badges align; longer clues stretch the badge.
+       `width: max-content` is critical — without it an absolutely-positioned
+       element with only `left` (no `right`) shrink-to-fits the SPACE between
+       `left` and the parent's right edge, so right-side badges (left:80%)
+       got clamped while left-side ones (left:20%) had room to grow. */
+    width: max-content;
+    min-width: calc(10rem * var(--badge-scale, 1));
+    background: #2f8d3f;
+    color: #fff;
+    border: 1px solid #1e4d29;
+    border-radius: calc(var(--radius) * var(--badge-scale, 1));
+    padding: calc(0.45rem * var(--badge-scale, 1)) calc(0.55rem * var(--badge-scale, 1));
+    text-align: center;
+    box-shadow: var(--shadow-md), 0 0 12px rgba(46, 204, 113, 0.35);
+    /* Stay above every card (cards: 1…N; lifted card during drag: 999). */
+    z-index: 1000;
+    /* Rotated so the badge sits along the boundary direction. --boundary-angle
+       is computed per badge in renderFlowerBoard (0° = top, going CW), with
+       lower-half boundaries flipped so text still reads upright. */
+    transform: translate(-50%, -50%) rotate(var(--boundary-angle, 0deg));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(2.2rem * var(--badge-scale, 1));
+}
+.clue-label { display: none; }
+.clue-text {
+    font-family: var(--font-display);
+    font-size: calc(0.95rem * var(--badge-scale, 1));
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    word-break: break-word;
+}
+.clue-text-input {
+    width: 100%;
+    padding: calc(0.3rem * var(--badge-scale, 1)) calc(0.4rem * var(--badge-scale, 1));
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-family: var(--font-display);
+    text-align: center;
+    outline: none;
+}
+.clue-text-input::placeholder { color: rgba(255, 255, 255, 0.7); }
+.clue-text-input:focus { border-color: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25); }
+.clue-text-input.invalid { border-color: var(--warn); box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.25); }
+
+/* Play toolbar — flex item between #topbar and #app-root in <body>. Sitting
+   OUTSIDE the scroll container means it isn't moved by play-area's CSS zoom
+   or by horizontal scroll, and its width is always full viewport width. */
+.play-toolbar {
+    position: fixed;
+    top: 2.2rem; /* sits flush under #topbar (height: 2.2rem) */
+    left: 0;
+    right: 0;
+    z-index: 1500; /* above play-area badges (z=1000) and any lifted card */
+    min-height: 2.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem 0.6rem;
+    background: transparent;
+    pointer-events: none; /* let clicks/scroll on the play-area pass through */
+}
+.play-toolbar > * {
+    pointer-events: auto; /* but the toolbar's own controls stay interactive */
+}
+.try-counter {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #1e4d29;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 0.3rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid rgba(30, 77, 41, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(4px);
+}
+.zoom-controls {
+    position: absolute;
+    right: calc(0.6rem + 20px); /* clear the #app-root scrollbar */
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+.zoom-label {
+    min-width: 2.6rem;
+    text-align: center;
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #1e4d29;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 0.2rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid rgba(30, 77, 41, 0.3);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+.zoom-controls .zoom-btn {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    color: #1e4d29;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(30, 77, 41, 0.3);
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* Stop iOS / Android Chrome from painting their default grey tap flash
+       on top of our white button. */
+    -webkit-tap-highlight-color: transparent;
+}
+/* On touch, :focus from a tap was leaving the button outlined; only show
+   the keyboard focus ring for keyboard navigation. */
+.zoom-controls .zoom-btn:focus { outline: none; }
+.zoom-controls .zoom-btn:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+.zoom-controls .zoom-btn svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    display: block;
+}
+.zoom-controls .zoom-btn:active { transform: scale(0.94); }
+
+/* ============================================================
+   Play area — flower in the centre, cards float freely around it.
+   ============================================================ */
+/* On the play screen #app-root holds only the play-area (try-counter is
+   position:fixed, so it doesn't take flow space). Strip every padding/gap so
+   the scrollable rect is *exactly* the play-area — the user can no longer
+   nudge the viewport a few pixels past the play-area edge.
+   max-width:none so the scrollbar lives at the viewport edge instead of in
+   the middle of the screen (1100 px cap looks great on setup/create, awful
+   on a wide play screen). */
+body[data-screen="play"] #app-root {
+    padding: 0;
+    gap: 0;
+    max-width: none;
+    /* Force full viewport width — without this the default flex layout left
+       the toolbar capped at ~1014 px on wide screens. */
+    width: 100vw;
+}
+/* Create screen also has a flower-board that can overflow #app-root; same
+   full-width treatment so the scrollbar lands at the viewport edge instead
+   of in the middle of the screen. The bottom padding/gap is stripped so
+   there's no empty whitespace below the flower-board. */
+body[data-screen="create"] #app-root {
+    max-width: none;
+    width: 100vw;
+    padding-bottom: 0;
+    gap: 0;
+}
+body[data-screen="create"] .flower-board {
+    /* Drop the bottom margin too — same reason: no empty room under the
+       flower on the create screen. */
+    margin-bottom: 0;
+}
+
+.play-area {
+    /* Zoom is applied here (a child of #app-root). Scaling on the CONTENT
+       keeps #app-root at its natural size, so the scrollbar sits at the
+       viewport edge and horizontal scrolling works at zoom > 100 %. */
+    zoom: var(--play-zoom, 1);
+    position: relative;
+    flex-shrink: 0;
+    margin: 0 auto;
+    touch-action: pan-x pan-y;
+}
+/* In the play screen the petal-words were rendering bigger than necessary
+   (the original 10cqw/max 1.4rem clamp was tuned for the smaller create
+   screen). Drop the per-edge text down a notch so it stays comfortably
+   inside the card on every flower size. */
+.play-area .petal-word {
+    font-size: clamp(0.55rem, 7cqw, 1.05rem);
+}
+.play-area .petal-card {
+    position: absolute;
+    /* width/height set inline (state.cardSize) per-render so cards always
+       match the slot-decoration size. */
+}
+/* Slot petal-cards keep whatever size main.js gives them and never get
+   squeezed by the flex slot. */
+body[data-screen="play"] .flower-slot .petal-card {
+    flex-shrink: 0;
+}
+body[data-screen="play"] .flower-slot .slot-drop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;   /* card can extend past the slot's visual area */
+}
+body[data-screen="play"] .flower-slot { overflow: visible; }
+
+/* Picked-up state on mobile: card lifts visibly so the player knows it's
+   ready to drag. */
+/* Drag/lift visual cue: deeper drop-shadow on the diamond (which is the
+   only visible form of the card). Applies whenever .picked-up is on the
+   card — both touch (added by the long-press timer) and mouse (added when
+   pointer moves past DRAG_THRESHOLD). */
+.petal-card.picked-up .diamond-body {
+    box-shadow:
+        0 14px 36px rgba(0, 0, 0, 0.55),
+        0 4px 10px rgba(0, 0, 0, 0.35),
+        var(--shadow-sm);
+    transition: box-shadow 0.15s ease-out;
+}
+
+/* ============================================================
+   Info popup (modal)
+   ============================================================ */
+.popup-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Above clue-badges (1000) and the lifted-card (999). */
+    z-index: 2000;
+    padding: 1rem;
+}
+.popup-box {
+    position: relative;
+    width: 100%;
+    max-width: 760px;
+    max-height: 85vh;
+    overflow-y: auto;
+    background:
+        radial-gradient(ellipse at 0% 0%, rgba(168, 230, 163, 0.45), transparent 55%),
+        radial-gradient(ellipse at 100% 100%, rgba(107, 207, 107, 0.35), transparent 55%),
+        linear-gradient(160deg, #ffffff 0%, #f3f9ee 60%, #d8edcb 100%);
+    color: #1a3a1f;
+    border: 2px solid #2f8d3f;
+    border-radius: var(--radius);
+    padding: 0 1.6rem;
+    box-shadow: var(--shadow-lg), 0 0 28px rgba(46, 204, 113, 0.35);
+}
+.popup-close {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.5rem;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: #4a6b4d;
+    font-size: 1.6rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.popup-close:hover { color: #1e4d29; background: rgba(46, 204, 113, 0.18); }
+.popup-body h3 {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    color: #1e4d29;
+    border-bottom: 1px solid rgba(46, 204, 113, 0.35);
+    padding-bottom: 0.25rem;
+    margin-top: 1rem;
+}
+.popup-body h3:first-child { margin-top: 0; }
+.popup-body p, .popup-body ul, .popup-body ol {
+    margin-top: 0.4rem;
+    line-height: 1.5;
+    color: #1a3a1f;
+}
+.popup-body ul, .popup-body ol { padding-left: 1.25rem; }
+.popup-body li { margin-top: 0.25rem; }
+.popup-body strong { color: #1e4d29; }
+.popup-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.4rem;
+    padding: 5px;
+}
+.popup-actions .btn {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.85rem;
+}
+
+/* ---- Simple-dialog modal (create-screen single-boundary editor) ---- */
+.simple-dialog-box {
+    /* 95 % of the viewport width, 90 % of the body height — overrides
+       .popup-box's defaults. */
+    width: 95vw;
+    height: 90vh;
+    max-width: 95vw;
+    max-height: 90vh;
+    /* Inner flex layout: header + pair + actions pinned, only the
+       "Other cards" region scrolls. */
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.simple-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    flex: 1;
+    min-height: 0;     /* allow inner overflow:auto child to actually scroll */
+}
+/* Top-locked rows. */
+.simple-dialog-header,
+.simple-clue-input,
+.simple-input-row,
+.simple-pair,
+.simple-pair-row,
+.simple-others-title {
+    flex-shrink: 0;
+}
+.simple-input-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 5px;
+    /* Stay above .simple-pair below — the rotated cards' visual extent
+       reaches ~41 px past their layout box and otherwise covers this row. */
+    position: relative;
+    z-index: 3;
+}
+/* Hidden right-side spacer matches the label's width so the input is
+   horizontally centred between two equal columns (and clears the absolute
+   × close button at the top-right of the modal). */
+.simple-boundary-spacer {
+    visibility: hidden;
+    pointer-events: none;
+}
+.simple-boundary-label {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1e4d29;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.simple-input-row .simple-clue-input { width: 80%; min-width: 300px; flex: 0 0 auto; box-sizing: border-box; }
+.simple-pair-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    /* Inherit the negative margin from .simple-pair so the row collapses
+       to the same height as the rotated cards. */
+}
+.simple-pair-nav {
+    flex: 0 0 auto;
+    width: 2.6rem;
+    height: 2.6rem;
+    padding: 0;
+    line-height: 1;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #1e4d29;
+    border: 1px solid rgba(30, 77, 41, 0.35);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* Stay above the rotated cards (which visually extend ~41 px past
+       their layout box and would otherwise swallow the clicks). */
+    position: relative;
+    z-index: 2;
+}
+.simple-pair-nav svg {
+    display: block;
+    width: 1.4rem;
+    height: 1.4rem;
+}
+/* Non-interactive cards in the pair shouldn't intercept pointer events at
+   all — that way the buttons under their visual overflow stay clickable. */
+.simple-pair-card { pointer-events: none; }
+/* Middle scrollable region — wraps the "Other cards" title + grid. */
+.simple-others-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 0.1rem;
+    border-bottom: 1px solid rgba(30, 77, 41, 0.18);
+}
+/* Bottom-locked actions. The negative margin-top neutralises the body's
+   flex gap so the action row sits flush against the scroll region above. */
+.simple-dialog-actions {
+    flex-shrink: 0;
+    margin-top: -0.8rem;
+}
+.simple-dialog-actions .btn { min-width: 5rem; }
+.simple-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-top: 5px;
+}
+.simple-dialog-title {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #1e4d29;
+    min-width: 9rem;
+    text-align: center;
+}
+.simple-nav-btn {
+    width: 2.2rem;
+    height: 2.2rem;
+    font-size: 1.4rem;
+    line-height: 1;
+    padding: 0;
+}
+.simple-clue-input {
+    /* override the badge variant's tinted look — this one sits on the
+       light modal background. */
+    background: #fff !important;
+    color: #1a3a1f !important;
+    border-color: rgba(30, 77, 41, 0.35) !important;
+    font-size: 1.05rem !important;
+    padding: 0.55rem 0.7rem !important;
+    text-align: center;
+}
+.simple-clue-input:focus {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px var(--primary-glow) !important;
+}
+.simple-clue-input::placeholder {
+    color: rgba(30, 77, 41, 0.5);
+}
+.simple-pair {
+    display: flex;
+    gap: 0;
+    justify-content: center;
+    align-items: center;
+    /* Cards are rotated 45°, so the visual diagonal (~212 px for a 150 px
+       card) overflows the layout box by ~31 px on each side. -22 px leaves
+       a ~10 px visible gap above and below the rotated diamond. */
+    margin: -22px 0;
+}
+/* Overlap the two cards' layout boxes — the diamond bodies are visually
+   centred and the boundary words meet at the join, so pulling them
+   together saves ~80 px of horizontal room. That space is what the
+   < > nav buttons need to stay on-screen on phones. */
+.simple-pair-card.simple-pair-left { margin-right: -2rem; }
+.simple-pair-card {
+    min-width: 150px;
+    width: 150px;
+    height: 150px;
+    position: relative;
+    flex: 0 0 auto;
+}
+/* Rotate the cards so the shared BOUNDARY word ends up on top. The left
+   card's boundary is its TR edge → -45° puts TR up. The right card's is
+   its BL edge → +45° puts BL up (rotating CCW from BL would also work,
+   but +45° matches the visual mirror of the left card). The inner
+   .diamond-body keeps its own rotate(45°), so each card still shows a
+   diamond silhouette with four word labels at its tips. */
+.simple-pair-card.simple-pair-left  { transform: rotate(-45deg); }
+.simple-pair-card.simple-pair-right { transform: rotate(45deg); }
+.simple-others-title {
+    margin: 0.6rem 0 0;
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    color: #1e4d29;
+    text-align: center;
+}
+.simple-others {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+.simple-other-card {
+    min-width: 150px;
+    width: 150px;
+    height: 150px;
+    position: relative;
+    flex: 0 0 auto;
+}
+.simple-dialog-actions {
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.simple-dialog-btn {
+    /* Centred toolbar button. */
+    font-weight: 700;
+    padding: 0.35rem 0.9rem;
+    background: rgba(255, 255, 255, 0.9);
+    color: #1e4d29;
+    border: 1px solid rgba(30, 77, 41, 0.35);
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* The info modal restores the popup-box's vertical padding that the
+   simple-dialog (and other custom modals) explicitly removed earlier. */
+#info-popup-overlay .popup-box {
+    padding: 1.5rem 1.6rem 1.7rem;
+}
+
+/* ---- Setup-screen menu actions (below Start) ---- */
+.menu-sep {
+    width: 100%;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.35);
+    border: none;
+    margin: 0.6rem 0 0.4rem;
+}
+.menu-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+}
+.menu-actions .btn {
+    flex: 1 1 auto;
+    min-width: 9rem;
+    /* Match the soft green panel — translucent white with white text,
+       matching the look of .panel .stepper / .panel .field select. */
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    font-weight: 600;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+@media (hover: hover) {
+    .menu-actions .btn:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.28);
+        border-color: rgba(255, 255, 255, 0.6);
+    }
+}
+
+/* Share modal download row */
+.share-download-row {
+    justify-content: center;
+    margin-top: 0.6rem;
+}
+
+/* Import-game modal */
+.import-game-textarea {
+    width: 100%;
+    min-height: 7rem;
+    margin-top: 0.6rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(30, 77, 41, 0.35);
+    font: inherit;
+    background: #fff;
+    color: #1a3a1f;
+    resize: vertical;
+}
+
+/* Play-specific-game picker list */
+.game-set-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+.game-set-item {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;          /* buttons drop to a second line when needed */
+    row-gap: 0.4rem;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(30, 77, 41, 0.2);
+    border-radius: var(--radius-sm);
+}
+/* Actions container — pushed to the right end of the row by margin-left:auto;
+   when the row wraps it sits on the second line, still right-aligned. */
+.game-set-row-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-left: auto;
+    flex-wrap: nowrap;        /* keep all three buttons on the same line */
+}
+.game-set-check {
+    flex: 0 0 1.4rem;
+    width: 1.4rem;
+    text-align: center;
+    font-weight: 800;
+    color: #1e8449;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+.game-set-item.done {
+    background: rgba(46, 204, 113, 0.18);
+    border-color: rgba(30, 132, 73, 0.5);
+}
+.game-set-item-label {
+    /* Shrink to the label's text width so the check renders DIRECTLY after
+       the text, not at the end of a filled column. The actions get pushed
+       to the right by their own margin-left:auto. */
+    flex: 0 1 auto;
+    min-width: 0;             /* allow ellipsis when label can't fit */
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    color: #1a3a1f;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.game-set-item .btn {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+}
+.game-set-actions {
+    justify-content: center;
+}
+
+/* ---- All-correct celebration modal ---- */
+.all-correct-box {
+    max-width: 420px;
+    text-align: center;
+    animation: all-correct-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes all-correct-pop {
+    0%   { transform: scale(0.4); opacity: 0; }
+    100% { transform: scale(1);   opacity: 1; }
+}
+.all-correct-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+}
+.all-correct-art {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 0.2rem;
+    margin-top: 0.5rem;
+    width: 100%;
+    height: 140px;
+}
+.all-correct-art .mini-flower {
+    width: 80px;
+    height: 80px;
+    animation: all-correct-bob 1.8s ease-in-out infinite;
+}
+.all-correct-art .mini-flower:nth-child(2) {
+    width: 110px;
+    height: 110px;
+    animation-delay: 0.15s;
+}
+.all-correct-art .mini-flower:nth-child(3) {
+    animation-delay: 0.3s;
+}
+@keyframes all-correct-bob {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50%      { transform: translateY(-6px) rotate(3deg); }
+}
+.all-correct-title {
+    font-family: var(--font-display);
+    font-size: 2rem;
+    font-weight: 800;
+    color: #1e4d29;
+    margin: 0.4rem 0 0;
+    text-shadow: 0 2px 0 rgba(255, 255, 255, 0.55);
+}
+.all-correct-sub {
+    font-size: 1rem;
+    color: #2f6a3a;
+    margin: 0;
+}
+.all-correct-box .popup-actions {
+    justify-content: center;
+    margin-top: 1.4rem;
+}
+.all-correct-box .popup-actions .btn { min-width: 8rem; }
+
+/* Copy field used in the share-game modal. */
+.copy-field { margin-top: 1rem; }
+.copy-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #1e4d29;
+    margin-bottom: 0.25rem;
+}
+.copy-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: stretch;
+}
+.copy-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem 0.6rem;
+    background: #fff;
+    color: #1a3a1f;
+    border: 1px solid #2f8d3f;
+    border-radius: var(--radius-sm);
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    word-break: break-all;          /* long URLs wrap inside the box */
+    user-select: text;
+    cursor: text;
+    line-height: 1.35;
+}
+.btn.copy-btn {
+    background: #1e4d29;
+    color: #fff;
+    border: 1px solid #133018;
+    width: 2.4rem;
+    height: auto;
+    padding: 0 0.4rem;
+}
+.btn.copy-btn:hover:not(:disabled) { background: #2a6b3a; }
+.btn.copy-btn svg { width: 1.1rem; height: 1.1rem; }
+
+/* ============================================================
+   Banner
+   ============================================================ */
+.banner {
+    position: fixed;
+    left: 50%;
+    bottom: 20px;
+    transform: translate(-50%, 30px);
+    /* Soft-meadow toast — green tones to match the topbar / primary buttons,
+       no longer the dark surface-elev which clashes with the light theme. */
+    background: linear-gradient(180deg, #2f8d3f 0%, #1e4d29 100%);
+    color: #fff;
+    padding: 0.7rem 1.1rem;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg), 0 0 18px rgba(46, 204, 113, 0.4);
+    border: 1px solid #133018;
+    font-weight: 600;
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+    /* Above the popup overlay (z=2000) so toast messages aren't blurred
+       by its backdrop-filter. */
+    z-index: 3000;
+    max-width: 90vw;
+    text-align: center;
+}
+.banner.show { opacity: 1; transform: translate(-50%, 0); }
+.banner.error { background: #5e2a23; border-color: #803a2e; }
+
+/* ============================================================
+   Responsive tweaks
+   ============================================================ */
+@media (max-width: 600px) {
+    #app-root { padding: 1rem 0.6rem 2rem; }
+    .panel { padding: 1.4rem 1rem; }
+    .title { font-size: 1.8rem; }
+    .screen-footer { flex-direction: column; }
+    .screen-footer .btn { width: 100%; }
+    .petal-tray .petal-card { width: 110px; height: 110px; }
+    /* No phone-specific .petal-word font-size override — the base rule uses
+       clamp(0.65rem, 10cqw, 1.4rem) so the word scales with the card width on
+       every screen. A flat 0.62rem here made phones unreadable next to PC. */
+    .clue-badge { min-width: 8rem; font-size: 0.82rem; }
+}

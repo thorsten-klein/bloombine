@@ -1,0 +1,18 @@
+#!/bin/bash
+# Simple HTTP server for Bloombine.
+# index.html also opens directly via file:// — wordlists are embedded in src/wordlists.js
+# (loaded via <script>), so no CORS-blocked fetches.
+
+PORT="${1:-8000}"
+
+echo "Starting Bloombine on http://localhost:$PORT"
+echo "Press Ctrl+C to stop"
+
+if command -v python3 &> /dev/null; then
+    python3 -m http.server "$PORT"
+elif command -v python &> /dev/null; then
+    python -m SimpleHTTPServer "$PORT"
+else
+    echo "Error: Python not found. Install Python or open index.html directly in a browser."
+    exit 1
+fi
