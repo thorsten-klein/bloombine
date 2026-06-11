@@ -694,11 +694,11 @@ body[data-screen="create"] .flower-board {
 }
 .try-counter {
     font-family: var(--font-display);
-    font-size: 1.1rem;
+    font-size: 0.55rem;
     font-weight: 700;
     color: #1e4d29;
     background: rgba(255, 255, 255, 0.9);
-    padding: 0.3rem 0.9rem;
+    padding: 0.15rem 0.45rem;
     border-radius: 999px;
     border: 1px solid rgba(30, 77, 41, 0.3);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
@@ -1337,16 +1337,25 @@ body[data-screen="play"] .flower-slot { overflow: visible; }
     cursor: text;
     line-height: 1.35;
 }
-.btn.copy-btn {
-    background: #1e4d29;
+.btn.copy-btn,
+.btn.share-native-btn {
     color: #fff;
-    border: 1px solid #133018;
     width: 2.4rem;
     height: auto;
     padding: 0 0.4rem;
 }
+.btn.copy-btn {
+    background: #1e4d29;
+    border: 1px solid #133018;
+}
+.btn.share-native-btn {
+    background: #60a5fa;          /* light blue */
+    border: 1px solid #3b82f6;
+}
 .btn.copy-btn:hover:not(:disabled) { background: #2a6b3a; }
-.btn.copy-btn svg { width: 1.1rem; height: 1.1rem; }
+.btn.share-native-btn:hover:not(:disabled) { background: #3b82f6; }
+.btn.copy-btn svg,
+.btn.share-native-btn svg { width: 1.1rem; height: 1.1rem; }
 
 /* ============================================================
    Banner

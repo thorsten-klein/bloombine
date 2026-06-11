@@ -376,7 +376,106 @@ window.addEventListener('resize', () => {
 // ----- topbar slots (back-button on the far left, action buttons on the right) -----
 function setTopbarActions(...nodes) {
     const slot = document.getElementById('topbar-right');
-    if (slot) slot.replaceChildren(...nodes);
+    if (slot) slot.replaceChildren(...nodes, makeFullscreenButton());
+}
+// ----- Edge-scroll while dragging a card -----
+// When the cursor (during a drag) approaches a viewport edge we scroll
+// #app-root in that direction at a speed proportional to how close it is.
+// The lifted card is position:fixed so it stays glued to the cursor while
+// the world scrolls under it — no extra repositioning needed.
+let _edgeScrollRAF = null;
+let _edgeScrollVX = 0;
+let _edgeScrollVY = 0;
+const EDGE_SCROLL_BAND = 80;       // px from a viewport edge that activates scroll
+const EDGE_SCROLL_MAX  = 24;       // max px per frame at the very edge
+function updateEdgeScroll(clientX, clientY) {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let vx = 0, vy = 0;
+    if (clientX < EDGE_SCROLL_BAND) {
+        vx = -((EDGE_SCROLL_BAND - clientX) / EDGE_SCROLL_BAND) * EDGE_SCROLL_MAX;
+    } else if (vw - clientX < EDGE_SCROLL_BAND) {
+        vx = ((EDGE_SCROLL_BAND - (vw - clientX)) / EDGE_SCROLL_BAND) * EDGE_SCROLL_MAX;
+    }
+    if (clientY < EDGE_SCROLL_BAND) {
+        vy = -((EDGE_SCROLL_BAND - clientY) / EDGE_SCROLL_BAND) * EDGE_SCROLL_MAX;
+    } else if (vh - clientY < EDGE_SCROLL_BAND) {
+        vy = ((EDGE_SCROLL_BAND - (vh - clientY)) / EDGE_SCROLL_BAND) * EDGE_SCROLL_MAX;
+    }
+    _edgeScrollVX = vx;
+    _edgeScrollVY = vy;
+    if ((vx || vy) && _edgeScrollRAF == null) {
+        const tick = () => {
+            if (_edgeScrollVX === 0 && _edgeScrollVY === 0) {
+                _edgeScrollRAF = null;
+                return;
+            }
+            const root = document.getElementById('app-root');
+            if (root) {
+                root.scrollLeft += _edgeScrollVX;
+                root.scrollTop  += _edgeScrollVY;
+            }
+            _edgeScrollRAF = requestAnimationFrame(tick);
+        };
+        _edgeScrollRAF = requestAnimationFrame(tick);
+    }
+}
+function stopEdgeScroll() {
+    if (_edgeScrollRAF != null) {
+        cancelAnimationFrame(_edgeScrollRAF);
+        _edgeScrollRAF = null;
+    }
+    _edgeScrollVX = _edgeScrollVY = 0;
+}
+// Toggle between fullscreen and normal. Stays in sync with the actual
+// fullscreen state via the 'fullscreenchange' event below (handles
+// pressing Esc, the browser-supplied exit button, etc.).
+function makeFullscreenButton() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn icon ghost fullscreen-btn';
+    btn.id = 'btn-fullscreen';
+    const setIcon = () => {
+        const inFs = !!document.fullscreenElement;
+        btn.title = inFs ? 'Exit fullscreen' : 'Fullscreen';
+        btn.setAttribute('aria-label', btn.title);
+        btn.innerHTML = inFs
+            ? // exit fullscreen icon — four arrows pointing inward
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+              + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+              + '<polyline points="9 4 9 9 4 9"/>'
+              + '<polyline points="15 4 15 9 20 9"/>'
+              + '<polyline points="9 20 9 15 4 15"/>'
+              + '<polyline points="15 20 15 15 20 15"/></svg>'
+            : // enter fullscreen icon — four arrows pointing outward
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+              + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+              + '<polyline points="4 9 4 4 9 4"/>'
+              + '<polyline points="20 9 20 4 15 4"/>'
+              + '<polyline points="4 15 4 20 9 20"/>'
+              + '<polyline points="20 15 20 20 15 20"/></svg>';
+    };
+    setIcon();
+    btn.addEventListener('click', async () => {
+        try {
+            if (document.fullscreenElement) await document.exitFullscreen();
+            else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+        } catch (err) {
+            showBanner('Fullscreen unavailable: ' + (err && err.message || ''), true);
+        }
+    });
+    return btn;
+}
+// Refresh ALL fullscreen-buttons (the current topbar one + any rendered
+// in previous frames that may still be in the DOM after re-render).
+if (typeof document !== 'undefined' && !document._fsListenerBound) {
+    document._fsListenerBound = true;
+    document.addEventListener('fullscreenchange', () => {
+        // Replace the topbar's fullscreen button with a freshly-built one so
+        // the icon flips to match the new state.
+        const old = document.getElementById('btn-fullscreen');
+        if (old && old.parentNode) old.parentNode.replaceChild(makeFullscreenButton(), old);
+    });
 }
 function setTopbarBack(onClick) {
     const slot = document.getElementById('topbar-back');
@@ -1061,6 +1160,32 @@ function makeCopyField(label, value) {
         + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
     row.appendChild(text);
     row.appendChild(btn);
+    // Web-Share-API button — invokes the platform share sheet (mobile +
+    // some desktop browsers). Hidden when navigator.share isn't available
+    // so we don't show a dead button on plain desktop Chromium / Firefox.
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        const shareBtn = el('button', {
+            class: 'btn icon share-native-btn', title: 'Share', 'aria-label': 'Share',
+            onclick: async () => {
+                try {
+                    await navigator.share({ title: 'Bloombine', text: label, url: value });
+                } catch (err) {
+                    // AbortError = user dismissed the sheet; stay silent.
+                    if (err && err.name !== 'AbortError') {
+                        showBanner('Share failed: ' + err.message, true);
+                    }
+                }
+            },
+        });
+        shareBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            + '<circle cx="18" cy="5"  r="3"/>'
+            + '<circle cx="6"  cy="12" r="3"/>'
+            + '<circle cx="18" cy="19" r="3"/>'
+            + '<line x1="8.6"  y1="13.5" x2="15.4" y2="17.5"/>'
+            + '<line x1="15.4" y1="6.5"  x2="8.6"  y2="10.5"/></svg>';
+        row.appendChild(shareBtn);
+    }
     wrap.appendChild(row);
     return wrap;
 }
@@ -1955,7 +2080,11 @@ function doReveal() {
         state.petalRot[i] = 0;
         const card = document.querySelector(`.petal-card[data-petal-id="${i}"]`);
         if (card) window.refreshPetalCard(card, state.petals[i]);
-        placePetal(i, i);
+        // Pass slotAngleDeg as currentAngleDeg AND noShift=true so
+        // placePetal's word-screen-stability rotation compensation is
+        // skipped — Reveal wants rotation 0 to stick, not be re-cycled.
+        const slotAngleDeg = (i / state.n) * 360;
+        placePetal(i, i, slotAngleDeg, true);
     }
     markGameDone(gamePayload());
     saveGameState();
@@ -2531,6 +2660,10 @@ function makePlayPetal(id) {
             const newCy = e.clientY - dragOffsetY;
             card.style.left = (newCx - half) + 'px';
             card.style.top  = (newCy - half) + 'px';
+            // Auto-scroll #app-root when the cursor is near a viewport edge.
+            // Lifted card is position:fixed, so it stays glued to the cursor
+            // while the world scrolls under it.
+            updateEdgeScroll(e.clientX, e.clientY);
         }
     });
 
@@ -2538,6 +2671,7 @@ function makePlayPetal(id) {
         if (e && e.pointerId !== activePointerId) return;
         activePointerId = null;
         if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+        stopEdgeScroll();
         const prevMode = mode;
         mode = 'idle';
         if (prevMode === 'pending' || prevMode === 'idle') return;
