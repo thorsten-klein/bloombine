@@ -1150,63 +1150,6 @@ function addToGameSet(g) {
     saveGameSet(set);
     return true;
 }
-// Seed the bundled default-game collection into the user's game-set on
-// first launch — flagged in localStorage so we don't re-seed and overwrite
-// any games the user has deleted.
-//
-// Bump DEFAULTS_VERSION whenever the bundled default_games.js changes
-// meaningfully. The bump triggers a one-time MIGRATION on next load:
-//   • games whose gameKey() matches any PREVIOUS default are removed
-//     (those are stale defaults the user never touched)
-//   • the NEW defaults are then merged in
-//   • user-created games (and edited copies of old defaults — different key)
-//     are preserved
-// The previous defaults are remembered in localStorage under
-// PREVIOUS_DEFAULT_KEYS so the next bump can do the same cleanup.
-const DEFAULTS_VERSION = 3;
-const DEFAULTS_SEEDED_KEY  = 'bloombine.defaultsSeededVersion';
-const PREVIOUS_DEFAULT_KEYS = 'bloombine.previousDefaultKeys';
-function seedDefaultGames() {
-    try {
-        const seededVer = parseInt(localStorage.getItem(DEFAULTS_SEEDED_KEY) || '0', 10);
-        if (seededVer >= DEFAULTS_VERSION) return;
-        const defaults = window.DEFAULT_GAMES;
-        if (!Array.isArray(defaults) || !defaults.length) return;
-
-        // Drop any games in the current set whose key matches a known
-        // PREVIOUS bundled default. This wipes stale defaults from older
-        // versions without touching user-created games.
-        let prevKeys = [];
-        try { prevKeys = JSON.parse(localStorage.getItem(PREVIOUS_DEFAULT_KEYS) || '[]'); } catch {}
-        // Legacy v1 didn't track its default-keys list, so we can't
-        // surgically remove its defaults. Nuke the game-set on that ONE
-        // migration; future bumps use the precise prevKeys path.
-        const legacyV1Flag = localStorage.getItem('bloombine.defaultsSeeded.v1');
-        let set;
-        if (legacyV1Flag && prevKeys.length === 0) {
-            set = [];
-            localStorage.removeItem('bloombine.defaultsSeeded.v1');
-        } else {
-            const prevSet = new Set(prevKeys);
-            set = loadGameSet().filter((g) => !prevSet.has(gameKey(g)));
-        }
-
-        // Merge in the new defaults (deduped).
-        const have = new Set(set.map(gameKey));
-        for (const g of defaults) {
-            if (!validateGamePayload(g)) continue;
-            const k = gameKey(g);
-            if (have.has(k)) continue;
-            set.push(g);
-            have.add(k);
-        }
-        saveGameSet(set);
-        // Remember THIS version's default keys for the NEXT migration.
-        const newKeys = defaults.filter(validateGamePayload).map(gameKey);
-        localStorage.setItem(PREVIOUS_DEFAULT_KEYS, JSON.stringify(newKeys));
-        localStorage.setItem(DEFAULTS_SEEDED_KEY, String(DEFAULTS_VERSION));
-    } catch {}
-}
 // Per-game completion flag. Keyed by gameKey(), so it survives across
 // game-set imports as long as the same game (same lang/n/seed/words/clues)
 // is in the set.
@@ -1393,7 +1336,23 @@ function openGameSetPicker() {
     }, '×');
     box.appendChild(close);
     const body = el('div', { class: 'popup-body' });
-    body.appendChild(el('h3', null, 'Play specific game'));
+    // Title row: heading + a small Reset button that wipes the entire
+    // game-set (after confirmation).
+    const resetBtn = el('button', {
+        type: 'button', class: 'btn',
+        style: 'padding:0.15rem 0.5rem;font-size:0.75rem;',
+        title: 'Clear the entire game set',
+        onclick: () => {
+            if (!confirm('Reset the game set? All saved games will be removed.')) return;
+            saveGameSet([]);
+            overlay.remove();
+            openGameSetPicker();
+        },
+    }, 'Reset');
+    const titleRow = el('div', {
+        style: 'display:flex;align-items:center;gap:0.6rem;',
+    }, el('h3', { style: 'margin:0;' }, 'Play specific game'), resetBtn);
+    body.appendChild(titleRow);
     if (set.length === 0) {
         body.appendChild(el('p', null, 'No games in set yet. Start a game from the main menu to add one.'));
     } else {
@@ -2883,7 +2842,6 @@ function loadFromHash() {
 
 window.addEventListener('DOMContentLoaded', () => {
     loadSettings();
-    seedDefaultGames();
     if (loadFromHash()) {
         history.replaceState({ screen: 'play' }, '', location.href);
         return;
