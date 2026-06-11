@@ -964,106 +964,55 @@ function renderFlowerBoard(n, opts = {}) {
 }
 
 // ----- cluegiver screen -----
+// renderCreate now PIGGYBACKS on renderPlay. The visual layout — flower in
+// the centre, draggable + rotatable cards around it — is identical; only
+// the toolbar buttons, the clue-input badges, and the initial card
+// placement (real petals pre-snapped to their slots) differ.
+//
+// Mechanism:
+//   • state.createMode = true tells renderPlay to take all create-screen
+//     branches (data-screen='create', skip random rotation, clueInput=true,
+//     Save/Play/Share topbar instead of Lock-in/Reveal, etc.)
+//   • state.petals is extended with 2 cluegiver-side extras (treated as
+//     state.e=2 decoys, so the existing tray-layout logic handles them)
+//   • state.placements pre-snaps real petals 0..n-1 into slots 0..n-1
+//   • state.extraPetals (the old separate tool array) is no longer used
 function renderCreate() {
-    document.body.dataset.screen = 'create';
-    // Back: clear any share-URL hash and go to the setup screen explicitly.
-    setTopbarBack(() => {
-        if (location.hash) {
-            history.replaceState({ screen: 'setup' }, '',
-                location.pathname + location.search);
+    // state.petals layout while in create mode:
+    //   [0 .. n−1]              real petals (saved with game)
+    //   [n .. n+e−1]            decoys     (saved with game; play-mode misdirection)
+    //   [n+e .. n+e+1]          2 cluegiver-only HELPERS (NOT saved)
+    // Helpers are visible+rotatable+swappable in create. They get sliced off
+    // before Save and before the Play hand-off so the game payload contains
+    // only the real petals + decoys.
+    const baseLen = state.n + (state.e || 0);    // game-relevant block
+    const need    = baseLen + 2;                 // + 2 helpers
+    if (state.petals.length !== need) {
+        let avail = [];
+        try {
+            const pool = wordlistFor(state.lang);
+            const used = new Set();
+            state.petals.slice(0, baseLen).forEach((p) =>
+                p.words.forEach((w) => used.add(w)));
+            avail = pool.filter((w) => !used.has(w));
+            for (let i = avail.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [avail[i], avail[j]] = [avail[j], avail[i]];
+            }
+        } catch {}
+        state.petals.length = baseLen;            // drop any stale helpers
+        for (let i = 0; i < 2; i++) {
+            const slice = avail.slice(i * 4, i * 4 + 4);
+            while (slice.length < 4) slice.push('');
+            state.petals.push({ id: baseLen + i, words: slice, rotation: 0 });
         }
-        navigate('setup');
-    });
-    const r = root();
-    r.replaceChildren();
-
-    // Zoom toolbar (same row pattern as play screen, but with only the
-    // zoom controls — no round counter). Lives outside #app-root in body
-    // so it isn't affected by the board's CSS zoom.
-    document.querySelectorAll('.play-toolbar').forEach((tb) => tb.remove());
-    const zoomOutBtn = el('button', {
-        class: 'btn icon zoom-btn', id: 'btn-zoom-out', title: 'Zoom out',
-        onclick: () => stepZoom(-1),
-    });
-    zoomOutBtn.innerHTML = ''
-        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        + '<circle cx="11" cy="11" r="7"/>'
-        + '<line x1="20.5" y1="20.5" x2="16" y2="16"/>'
-        + '<line x1="7.5" y1="11" x2="14.5" y2="11"/></svg>';
-    const zoomInBtn = el('button', {
-        class: 'btn icon zoom-btn', id: 'btn-zoom-in', title: 'Zoom in',
-        onclick: () => stepZoom(+1),
-    });
-    zoomInBtn.innerHTML = ''
-        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        + '<circle cx="11" cy="11" r="7"/>'
-        + '<line x1="20.5" y1="20.5" x2="16" y2="16"/>'
-        + '<line x1="7.5" y1="11" x2="14.5" y2="11"/>'
-        + '<line x1="11" y1="7.5" x2="11" y2="14.5"/></svg>';
-    const zoomLabel = el('div', { class: 'zoom-label', id: 'zoom-label' },
-        Math.round(getUserZoom() * getZoom() * 100) + '%');
-    const zoomCtrls = el('div', { class: 'zoom-controls' }, zoomOutBtn, zoomLabel, zoomInBtn);
-    // Centred Simple-dialog button — opens a focused view of one boundary's
-    // pair of cards with a single input for that boundary's clue.
-    const simpleBtn = el('button', {
-        class: 'btn simple-dialog-btn',
-        type: 'button',
-        onclick: () => openSimpleDialog(0),
-    }, 'Simple dialog');
-    const playBar = el('div', { class: 'play-toolbar' }, simpleBtn, zoomCtrls);
-    document.body.insertBefore(playBar, r);
-    updateZoomButtonsState();
-
-    // Board with cluegiver-mode inputs at each boundary, petals placed at their correct slots.
-    const board = renderFlowerBoard(state.n, { clueInput: true });
-    r.appendChild(board);
-    // Reflect the user's MANUAL zoom (userZoom) on #app-root so the board
-    // (its child) scales with it. state.zoom is the auto-fit layout scale,
-    // not the CSS visual scale.
-    r.style.setProperty('--play-zoom', getUserZoom());
-
-    // Drop real petals (id 0..n-1) into their slots, rotation 0
-    for (let k = 0; k < state.n; k++) {
-        const slot = board.querySelector(`.flower-slot[data-slot="${k}"] .slot-drop`);
-        const petal = state.petals[k];
-        petal.rotation = 0;
-        slot.appendChild(window.renderPetalCard(petal, { interactive: false, levelN: state.n }));
     }
-
-    // Decoy petals still exist in state (sampled at draw time) but the cluegiver
-    // never sees them — they only show up shuffled into the play-mode tray.
-    for (let i = state.n; i < state.n + state.e; i++) state.petals[i].rotation = 0;
-
-    requestAnimationFrame(() => window.fitAllPetalWords(r));
-
-    // Topbar actions: info popup, Google-style share icon, Play button.
-    const infoBtn = makeInfoButton(infoForCreate);
-    const shareBtn = makeShareButton({ requireCommit: true });
-    const saveBtn = el('button', {
-        class: 'btn primary',
-        id: 'btn-save',
-        title: 'Save to game set',
-        style: 'background:#1e4d29;border-color:#133018;color:#fff;',
-        // Save bypasses commit()'s clue validation — partial games are fine
-        // in the set. The added game's Play button is greyed in the picker
-        // until the user finishes the clues.
-        onclick: () => {
-            state.clues = state.clues.map((c) => (c || '').trim());
-            const added = addToGameSet(gamePayload());
-            showBanner(added ? 'Game saved to set' : 'Game already in set');
-            navigate('setup');
-        },
-    }, 'Save');
-    const playBtn = el('button', {
-        class: 'btn primary',
-        id: 'btn-play',
-        style: 'background:#1e4d29;border-color:#133018;color:#fff;',
-        onclick: () => commit(() => navigate('play')),
-    }, t('play'));
-    setTopbarActions(infoBtn, shareBtn, saveBtn, playBtn);
-    updatePlayButtonState();
+    state.createMode = true;
+    // Pre-snap each real petal into its own slot.
+    state.placements = {};
+    for (let i = 0; i < state.n; i++) state.placements[i] = i;
+    state.trayPositions = {};
+    renderPlay();
 }
 
 // Build the Google-style share icon button.
@@ -1255,11 +1204,31 @@ function saveGameSet(arr) {
     try { localStorage.setItem(GAME_SET_KEY, JSON.stringify(arr)); } catch {}
 }
 function gamePayload() {
+    // Bake each petal's cluegiver-side rotation into the words array so
+    // the saved payload reflects exactly what the cluegiver sees on
+    // screen (without needing a rotation field in the schema).
+    //   With rotation r, the rendered word at edge e is words[(e - r) % 4].
+    //   Permute so visible[e] becomes saved[e].
+    // In create mode there are 2 cluegiver-only HELPER petals appended to
+    // state.petals — slice them off so the game payload contains only the
+    // real petals (+ decoys) the player will see.
+    const baseLen = state.n + (state.e || 0);
+    const baked = state.petals.slice(0, baseLen).map((p) => {
+        const r = (((p.rotation || 0) % 4) + 4) % 4;
+        if (r === 0) return p.words.slice();
+        const w = p.words;
+        return [
+            w[(0 - r + 4) % 4],
+            w[(1 - r + 4) % 4],
+            w[(2 - r + 4) % 4],
+            w[(3 - r + 4) % 4],
+        ];
+    });
     return {
         l: state.lang,
         n: state.n,
         e: state.e,
-        p: state.petals.map(p => p.words),
+        p: baked,
         c: state.clues,
         s: state.shuffleSeed || 1,
     };
@@ -1379,6 +1348,7 @@ function playGameFromPayload(g) {
     state.placements = {};
     state.trayPositions = {};
     state.tries = 0;
+    state.createMode = false;
     location.hash = '';
     navigate('play');
 }
@@ -1557,52 +1527,121 @@ function openGameSetPicker() {
 const TRAY_GAP = 14;
 
 function renderPlay() {
-    document.body.dataset.screen = 'play';
-    // Exit: clear the share-URL hash so the next render doesn't reload the
-    // game from it, then navigate explicitly to the setup screen.
-    setTopbarBack(() => confirmExit(() => {
-        if (location.hash) {
-            history.replaceState({ screen: 'setup' }, '',
-                location.pathname + location.search);
-        }
-        navigate('setup');
-    }));
+    const createMode = state.createMode === true;
+    document.body.dataset.screen = createMode ? 'create' : 'play';
+    // Back: in play, confirm before leaving a game in progress; in create
+    // just navigate setup directly (clue authoring isn't a "game in progress").
+    if (createMode) {
+        setTopbarBack(() => {
+            state.createMode = false;
+            if (location.hash) {
+                history.replaceState({ screen: 'setup' }, '',
+                    location.pathname + location.search);
+            }
+            navigate('setup');
+        });
+    } else {
+        setTopbarBack(() => confirmExit(() => {
+            if (location.hash) {
+                history.replaceState({ screen: 'setup' }, '',
+                    location.pathname + location.search);
+            }
+            navigate('setup');
+        }));
+    }
     const r = root();
     r.replaceChildren();
-    state.placements = {};
-    state.trayPositions = {}; // reset; restoreGameState overlays saved values later.
+    // PLAY: reset placements + tray (restoreGameState may overlay later).
+    // CREATE: keep the pre-populated state.placements (real petals → slots).
+    if (!createMode) {
+        state.placements = {};
+        state.trayPositions = {};
+    }
     state.tries = state.tries || 0;
 
-    // Randomize each petal's starting rotation + tray order using the seed.
+    // PLAY: randomise per-petal rotation + tray order from the seed.
+    // CREATE: rotations stay 0, palette is identity (no shuffle).
     const total = state.petals.length;
     const seed = state.shuffleSeed || 1;
-    const rotR = rng(seed ^ 0x9E3779B1);
     state.petalRot = {};
-    for (let i = 0; i < total; i++) {
-        state.petalRot[i] = Math.floor(rotR() * 4);
-        state.petals[i].rotation = state.petalRot[i];
+    if (createMode) {
+        for (let i = 0; i < total; i++) {
+            state.petals[i].rotation = state.petals[i].rotation || 0;
+            state.petalRot[i] = state.petals[i].rotation;
+        }
+        // Cluegiver sees: real petals (0..n-1) + helpers (n+e..end).
+        // Decoys (n..n+e-1) are hidden — they're play-time misdirection only.
+        const baseLen = state.n + (state.e || 0);
+        state.palette = state.petals
+            .filter((_, i) => i < state.n || i >= baseLen)
+            .map(p => p.id);
+    } else {
+        const rotR = rng(seed ^ 0x9E3779B1);
+        for (let i = 0; i < total; i++) {
+            state.petalRot[i] = Math.floor(rotR() * 4);
+            state.petals[i].rotation = state.petalRot[i];
+        }
+        state.palette = shuffleSeeded(state.petals.map(p => p.id), seed);
     }
-    state.palette = shuffleSeeded(state.petals.map(p => p.id), seed);
 
-    const lockInBtn = el('button', {
-        class: 'btn primary', id: 'btn-lockin',
-        onclick: () => lockInGuess(),
-    }, t('lockIn'));
-    const revealBtn = el('button', {
-        class: 'btn danger', id: 'btn-reveal',
-        onclick: () => doReveal(),
-    }, t('reveal'));
-    setTopbarActions(
-        makeInfoButton(infoForPlay),
-        makeShareButton({ requireCommit: false }),
-        lockInBtn,
-        revealBtn,
-    );
+    if (createMode) {
+        const infoBtn = makeInfoButton(infoForCreate);
+        const shareBtn = makeShareButton({ requireCommit: true });
+        const saveBtn = el('button', {
+            class: 'btn primary',
+            id: 'btn-save',
+            title: 'Save to game set',
+            style: 'background:#1e4d29;border-color:#133018;color:#fff;',
+            onclick: () => {
+                state.clues = state.clues.map((c) => (c || '').trim());
+                const added = addToGameSet(gamePayload());
+                showBanner(added ? 'Game saved to set' : 'Game already in set');
+                navigate('setup');
+            },
+        }, 'Save');
+        const playBtn = el('button', {
+            class: 'btn primary',
+            id: 'btn-play',
+            style: 'background:#1e4d29;border-color:#133018;color:#fff;',
+            onclick: () => commit(() => {
+                state.createMode = false;
+                // Trim cluegiver-only helpers from state.petals so the
+                // play screen sees only real petals + decoys.
+                state.petals.length = state.n + (state.e || 0);
+                state.placements = {};
+                state.trayPositions = {};
+                state.tries = 0;
+                navigate('play');
+            }),
+        }, t('play'));
+        setTopbarActions(infoBtn, shareBtn, saveBtn, playBtn);
+    } else {
+        const lockInBtn = el('button', {
+            class: 'btn primary', id: 'btn-lockin',
+            onclick: () => lockInGuess(),
+        }, t('lockIn'));
+        const revealBtn = el('button', {
+            class: 'btn danger', id: 'btn-reveal',
+            onclick: () => doReveal(),
+        }, t('reveal'));
+        setTopbarActions(
+            makeInfoButton(infoForPlay),
+            makeShareButton({ requireCommit: false }),
+            lockInBtn,
+            revealBtn,
+        );
+    }
 
-    // Toolbar pinned below the topbar: round counter (centred) + zoom
-    // controls (right-aligned), on the same horizontal line.
-    const tryEl = el('div', { class: 'try-counter', id: 'try-counter' },
-        t('tries', { c: (state.tries || 0) + 1 }));
+    // Toolbar pinned below the topbar. In play: round counter + zoom.
+    // In create: a "Simple dialog" button (focused single-boundary editor)
+    // + zoom — both use the same horizontal-bar layout.
+    const tryEl = createMode
+        ? el('button', {
+            class: 'btn simple-dialog-btn', type: 'button',
+            onclick: () => openSimpleDialog(0),
+        }, 'Simple dialog')
+        : el('div', { class: 'try-counter', id: 'try-counter' },
+            t('tries', { c: (state.tries || 0) + 1 }));
     const zoomOutBtn = el('button', {
         class: 'btn icon zoom-btn', id: 'btn-zoom-out', title: 'Zoom out',
         onclick: () => stepZoom(-1),
@@ -1664,8 +1703,10 @@ function renderPlay() {
 
     // Build the board first so we know its exact (boardW × boardH) — those
     // become the play-area's dimensions (play-area = flower-board).
+    //   clueInput: true in create (cluegiver-side per-boundary inputs);
+    //   clueInput: false in play  (badges show the locked-in clue text).
     const board = renderFlowerBoard(state.n, {
-        clueInput: false,
+        clueInput: createMode,
         onSlotDrop: (slotIdx, petalId) => placePetal(petalId, slotIdx),
         size: flowerSize,
     });
@@ -1759,8 +1800,12 @@ function renderPlay() {
     }
     // Already-saved card positions count as obstacles too — never overlay
     // a card whose position is fixed by state.trayPositions.
+    // Cards already PLACED in slots (state.placements) don't need tray
+    // positions at all — they'll be moved into their slot after the loop.
+    const placedIds = new Set(Object.values(state.placements || {}));
     const needPositions = [];      // [{ idx, id }] for cards without a saved pos
     state.palette.forEach((id, idx) => {
+        if (placedIds.has(id)) return;
         const saved = state.trayPositions[id];
         if (saved) obstacles.push(cardRectAt(saved.x, saved.y));
         else       needPositions.push({ idx, id });
@@ -1846,10 +1891,28 @@ function renderPlay() {
         const card = makePlayPetal(id);
         card.style.width  = state.cardSize + 'px';
         card.style.height = state.cardSize + 'px';
-        const pos = state.trayPositions[id];
-        card.style.left = pos.x + 'px';
-        card.style.top = pos.y + 'px';
-        playArea.appendChild(card);
+        if (placedIds.has(id)) {
+            // Already-placed (create mode): drop straight into the slot.
+            // Find the slotIdx for this petal id.
+            let slotIdx = null;
+            for (const k in state.placements) {
+                if (state.placements[k] === id) { slotIdx = parseInt(k, 10); break; }
+            }
+            if (slotIdx == null) return;
+            const slotDrop = document.querySelector(
+                `.flower-slot[data-slot="${slotIdx}"] .slot-drop`);
+            if (slotDrop) {
+                slotDrop.appendChild(card);
+                // Clear any inline left/top — the slot positions the card.
+                card.style.left = '';
+                card.style.top  = '';
+            }
+        } else {
+            const pos = state.trayPositions[id];
+            card.style.left = pos.x + 'px';
+            card.style.top = pos.y + 'px';
+            playArea.appendChild(card);
+        }
     });
 
     // (Auto-fit happens up above, BEFORE positions are committed: if not
@@ -1874,7 +1937,11 @@ function renderPlay() {
         }
     });
 
-    updateLockInButtonState();
+    if (createMode) {
+        updatePlayButtonState();   // gates Save/Play/Share on full clues
+    } else {
+        updateLockInButtonState();
+    }
 }
 
 // Global Ctrl+wheel zoom + 2-finger pinch zoom. Bound once on document
@@ -2622,6 +2689,9 @@ function makePlayPetal(id) {
             // SCROLL the play-area, not pick up a card — promote to 'panning'
             // and forward the deltas to #app-root.scroll*.
             if (e.pointerType !== 'touch' && moved >= DRAG_THRESHOLD) {
+                // Locked cards must NOT drag — bail before lifting so we
+                // don't re-parent to body and then no-op every frame after.
+                if (state.locked[id]) { suppressClick = true; return; }
                 mode = 'dragging';
                 suppressClick = true;
                 card.classList.add('picked-up');
@@ -2635,6 +2705,9 @@ function makePlayPetal(id) {
             }
         } else if (mode === 'lock-armed') {
             if (moved < DRAG_THRESHOLD) return;
+            // Same guard for touch — lock-armed shouldn't escalate to a
+            // drag if the card is locked (release will just unlock).
+            if (state.locked[id]) return;
             mode = 'dragging';
         }
 
