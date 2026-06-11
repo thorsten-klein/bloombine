@@ -57,7 +57,7 @@ const DEFAULT_UI_LANG = 'en';
 const state = {
     uiLang: DEFAULT_UI_LANG,
     lang: DEFAULT_LANG,
-    n: 6,        // petals in the ring
+    n: 4,        // petals in the ring
     e: 1,        // extra decoy petals
     zoom: 1,     // LAYOUT scale (auto-fit only — re-renders & re-arranges)
     userZoom: 1, // VISUAL scale (manual zoom — CSS zoom, no re-arrange)
@@ -408,6 +408,46 @@ function setTopbarActions(...nodes) {
     const slot = document.getElementById('topbar-right');
     if (slot) slot.replaceChildren(...nodes, makeSettingsButton(), makeFullscreenButton());
 }
+// ----- Pan momentum (kinetic scroll) -----
+// After a finger-pan on the play-area ends, keep scrolling at the user's
+// final velocity and decay smoothly to zero. Matches the native mobile
+// inertial-scroll feel. Any new touch on a card (pointerdown there) cancels
+// the momentum so the user can stop it by touching.
+let _momentumRAF = 0;
+let _momentumVX = 0;
+let _momentumVY = 0;
+function cancelMomentum() {
+    if (_momentumRAF) { cancelAnimationFrame(_momentumRAF); _momentumRAF = 0; }
+    _momentumVX = 0;
+    _momentumVY = 0;
+}
+// vx, vy are in px-per-millisecond (finger-velocity at touchend). We negate
+// when applying because finger-right → scroll-left (panning shifts scroll
+// opposite the finger). FRICTION compounds per frame (~60Hz): 0.94^60 ≈ 0.03
+// so a flick stops in about a second of decay.
+function startMomentum(vx, vy) {
+    cancelMomentum();
+    if (Math.abs(vx) < 0.05 && Math.abs(vy) < 0.05) return;
+    _momentumVX = vx;
+    _momentumVY = vy;
+    const sc = document.getElementById('app-root');
+    if (!sc) return;
+    const FRICTION = 0.94;
+    const MIN_V = 0.04;
+    const FRAME_MS = 16;
+    const step = () => {
+        _momentumRAF = 0;
+        sc.scrollLeft -= _momentumVX * FRAME_MS;
+        sc.scrollTop  -= _momentumVY * FRAME_MS;
+        _momentumVX *= FRICTION;
+        _momentumVY *= FRICTION;
+        if (Math.abs(_momentumVX) > MIN_V || Math.abs(_momentumVY) > MIN_V) {
+            _momentumRAF = requestAnimationFrame(step);
+        }
+    };
+    _momentumRAF = requestAnimationFrame(step);
+}
+
 // ----- Edge-scroll while dragging a card -----
 // While the cursor (during a drag) is within EDGE_SCROLL_BAND of a viewport
 // edge, scroll #app-root in that direction at a speed proportional to how
@@ -867,11 +907,80 @@ function setZoom(z) {
     state.userZoom = next;
     updateZoomButtonsState();
     saveSettings();
-    // Manual zoom = VISUAL CSS scale only. Don't touch state.zoom (the
-    // layout scale) and don't re-render — cards keep their positions and
-    // just appear bigger/smaller.
+    applyVisualZoom();
+    centerScroll();
+}
+// Centre the wrap inside #app-root so the user has scroll room in BOTH
+// directions (without this, scrollLeft = 0 starts the viewport at the wrap's
+// left edge — user can pan in one direction only). Called after every
+// applyVisualZoom so the scroll bounds the user sees match the new layout.
+function centerScroll() {
     const appRoot = document.getElementById('app-root');
-    if (appRoot) appRoot.style.setProperty('--play-zoom', next);
+    if (!appRoot) return;
+    // Force a synchronous layout pass before reading dimensions / setting
+    // scroll — without this the scrollWidth/Height returned can lag a
+    // frame behind the wrap's just-changed width/height, and our scroll
+    // assignment gets clamped against stale bounds (the user then has to
+    // wait until the layout catches up to actually scroll the full range).
+    void appRoot.offsetHeight;
+    const maxX = Math.max(0, appRoot.scrollWidth  - appRoot.clientWidth);
+    const maxY = Math.max(0, appRoot.scrollHeight - appRoot.clientHeight);
+    if (maxX > 0) appRoot.scrollLeft = maxX / 2;
+    if (maxY > 0) appRoot.scrollTop  = maxY / 2;
+}
+// Push the current state.userZoom out to the DOM in ONE consistent way:
+//   • --play-zoom (drives .play-area's transform: scale via CSS variable)
+//   • wrap.style.width/height (the scaled scroll bounds)
+//   • clear any inline transform on .play-area so the CSS variable wins.
+// Called by setZoom (button/Ctrl-wheel) and by endPinch (touchend commit).
+function applyVisualZoom() {
+    const z = getUserZoom();
+    const appRoot = document.getElementById('app-root');
+    if (appRoot) appRoot.style.setProperty('--play-zoom', z);
+    const wrap = document.getElementById('play-wrap');
+    const playArea = document.getElementById('play-area');
+    if (wrap && playArea) {
+        const playW = parseFloat(playArea.style.width)  || 0;
+        const playH = parseFloat(playArea.style.height) || 0;
+        const scaledW = playW * z;
+        const scaledH = playH * z;
+        wrap.style.width  = scaledW + 'px';
+        wrap.style.height = scaledH + 'px';
+        if (appRoot) {
+            const cw = appRoot.clientWidth;
+            const ch = appRoot.clientHeight;
+            const tb = document.querySelector('.play-toolbar');
+            const toolbarH = tb ? Math.ceil(tb.getBoundingClientRect().height) : 0;
+            // SYMMETRIC horizontal margins: equal padding on left AND right.
+            // For narrow wrap, the half-missing centring; for wide wrap, 0.
+            // Symmetry is what makes scroll-range equal in both directions —
+            // without it (asymmetric offsetLeft) `(scrollWidth − clientWidth)
+            // / 2` isn't the wrap-centre position.
+            const halfX = Math.max(0, (cw - scaledW) / 2);
+            wrap.style.marginLeft  = halfX + 'px';
+            wrap.style.marginRight = halfX + 'px';
+            // SYMMETRIC vertical margins: at LEAST toolbarH (clears the
+            // fixed-position toolbar) PLUS the half-missing centring offset
+            // when wrap is narrower than the viewport. The +toolbarH on top
+            // of centring guarantees the wrap.outer always exceeds the
+            // viewport by 2*toolbarH — so the user always has some scroll
+            // headroom, even after a slight zoom-out. Without this buffer,
+            // shrinking the wrap into the viewport killed scroll entirely
+            // and the user couldn't pan up/down anymore.
+            const halfY = Math.max(0, (ch - scaledH) / 2);
+            const marginY = halfY + toolbarH;
+            wrap.style.marginTop    = marginY + 'px';
+            wrap.style.marginBottom = marginY + 'px';
+        }
+        // Inline transform / position offsets from a previous pinch —
+        // clear so the CSS transform: scale(var(--play-zoom)) and the
+        // natural absolute-position (0,0 inside wrap) take effect uniformly.
+        playArea.style.transform = '';
+        playArea.style.transformOrigin = '';
+        playArea.style.willChange = '';
+        playArea.style.left = '';
+        playArea.style.top  = '';
+    }
 }
 // Disable the +/- buttons at the userZoom bounds, and refresh the label
 // to the EFFECTIVE scale (userZoom × layoutZoom). The label needs the
@@ -1843,17 +1952,32 @@ function renderPlay() {
     const playArea = el('div', { class: 'play-area', id: 'play-area' });
     playArea.style.width  = playW + 'px';
     playArea.style.height = playH + 'px';
-    playArea.style.marginTop = toolbarH + 'px';
     // --badge-scale scales clue-badge dimensions with the flower. The
     // 1.0 multiplier matches the rem-based defaults; bigger values (1.5)
     // overflowed the play screen visibly.
     playArea.style.setProperty('--badge-scale', (flowerSize / G.VB).toFixed(3));
-    r.appendChild(playArea);
-    // CSS --play-zoom carries the manual VISUAL zoom (userZoom) on top of
-    // the auto-fit layout. state.zoom (the layout scale) is already baked
-    // into flowerSize/cardSize above — userZoom just visually scales
-    // without re-arranging anything.
-    r.style.setProperty('--play-zoom', getUserZoom());
+    // Wrap holds the scaled scroll dimensions + the toolbar offset.
+    // play-area inside is absolutely positioned and visually scaled via
+    // CSS transform (driven by --play-zoom). Layout box of play-area
+    // stays at (playW × playH) at all zooms → no centring shift, no
+    // pinch-end jump.
+    const uz0 = getUserZoom();
+    const playWrap = el('div', { class: 'play-wrap', id: 'play-wrap' });
+    // Initial inline dims (will be re-set by applyVisualZoom below, but
+    // gives a sensible fallback if applyVisualZoom can't measure layout).
+    playWrap.style.width  = (playW * uz0) + 'px';
+    playWrap.style.height = (playH * uz0) + 'px';
+    playWrap.style.marginTop    = toolbarH + 'px';
+    playWrap.style.marginBottom = toolbarH + 'px';
+    playWrap.appendChild(playArea);
+    r.appendChild(playWrap);
+    // Re-run applyVisualZoom now that the wrap is in the DOM, so margins
+    // and the --play-zoom variable reflect the proper computed values
+    // (especially the symmetric vertical buffer that needs the actual
+    // measured toolbar height). Without this, the initial render uses the
+    // fallback inline values set above; first real layout-correct state
+    // would only happen after the first zoom button / pinch.
+    applyVisualZoom();
 
     // Flower-board sits at the top of the play-area, horizontally centred.
     // The play-area itself already starts below the toolbar (marginTop above),
@@ -2102,6 +2226,32 @@ function renderPlay() {
 // too). They call setZoom which only updates #app-root's --play-zoom.
 if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
     window._zoomGesturesBound = true;
+    // ---- multi-touch tracking ----
+    // `_multiTouchActive` is hardware: TRUE while ≥ 2 fingers are on screen,
+    // regardless of whether the pinch gesture has engaged. Card pointer
+    // logic (drag, long-press) gates on THIS so a second finger landing on
+    // the screen never lets a card start dragging, even before the pinch
+    // deadzone is crossed. The instant we cross into multi-touch, we also
+    // synthesise pointercancel on every card so any pending drag tears down.
+    window._multiTouchActive = false;
+    const cancelAllCardPointers = () => {
+        document.querySelectorAll('.petal-card').forEach((c) => {
+            try { c.releasePointerCapture && c.releasePointerCapture(0); } catch {}
+            try {
+                c.dispatchEvent(new PointerEvent('pointercancel', {
+                    bubbles: true, cancelable: true, pointerId: 0,
+                }));
+            } catch {}
+        });
+    };
+    const updateMultiTouch = (count) => {
+        const wasMulti = window._multiTouchActive;
+        window._multiTouchActive = count >= 2;
+        if (window._multiTouchActive && !wasMulti) cancelAllCardPointers();
+    };
+    window.addEventListener('touchstart',  (e) => updateMultiTouch(e.touches.length), { passive: true, capture: true });
+    window.addEventListener('touchend',    (e) => updateMultiTouch(e.touches.length), { passive: true, capture: true });
+    window.addEventListener('touchcancel', (e) => updateMultiTouch(e.touches.length), { passive: true, capture: true });
     // Ctrl+wheel.
     window.addEventListener('wheel', (e) => {
         if (!e.ctrlKey) return;
@@ -2122,6 +2272,16 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
     // midpoint — the fixed anchor we keep under the moving midpoint.
     let pinchAnchorCX = 0;
     let pinchAnchorCY = 0;
+    // Per-finger tracking so we can require BOTH fingers to have moved
+    // before treating the gesture as a real pinch (deadzone). Without this,
+    // resting two fingers on the screen and twitching only one was being
+    // read as a zoom + pan because the distance + midpoint shift.
+    let pinchIdA = -1, pinchIdB = -1;
+    let pinchA0X = 0, pinchA0Y = 0;
+    let pinchB0X = 0, pinchB0Y = 0;
+    let pinchEngaged = false;
+    const PINCH_FINGER_DEADZONE = 6;   // each finger must travel ≥6 px
+    const PINCH_DIST_DEADZONE   = 12;  // and the finger distance must change ≥12 px
     const tDist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
     const tMid  = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
     // Single source of truth: while this is true, the card pointer logic
@@ -2163,98 +2323,131 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
     };
     const flushPinch = () => {
         pinchRAF = 0;
-        if (!window._pinchActive || !pinchPendingMid || !pinchPlayArea) return;
-        const appRoot = document.getElementById('app-root');
-        if (!appRoot) return;
-        const scaleRel = pinchPendingZoom / pinchZoom0;
-        const rect = appRoot.getBoundingClientRect();
-        const cw = appRoot.clientWidth;
-        const ch = appRoot.clientHeight;
-        const playW = parseFloat(pinchPlayArea.style.width)  || cw;
-        const playH = parseFloat(pinchPlayArea.style.height) || ch;
-        const marginTop = parseFloat(pinchPlayArea.style.marginTop) || 0;
-        // Compute, axis-by-axis, where the play-area's top-left WILL BE on
-        // commit (when the CSS-zoom layout takes over). The transform must
-        // place it there NOW so pinch-end visual = post-commit visual ⇒
-        // zero settle.
-        //
-        // Single continuous formula: simulate what the browser does on
-        // commit — apply CSS zoom (effective dims = playW*z + marginTop*z
-        // for the box), compute the anchor-pinning scroll target, CLAMP
-        // scroll to [0, max], then derive play-area top-left from the
-        // clamped scroll. This handles narrow (scroll clamped to 0, play-
-        // area centred / top-pinned) AND wide (scroll absorbs the anchor
-        // position) with the SAME expression, so the regimes connect
-        // smoothly during the gesture too.
-        //
-        // CSS `zoom` scales the element's box AND its margins/centring,
-        // hence the *z multipliers throughout.
+        if (!window._pinchActive || !pinchPlayArea) return;
+        // Anchor-fixed scaling around the viewport-centre point captured at
+        // touchstart. With transform-origin (0,0) and our inline transform
+        // OVERRIDING the CSS scale(var(--play-zoom)), we need to set the
+        // absolute scale (not a relative one). Anchor in LAYOUT coords
+        // (pinchAnchorCX) stays fixed when:
+        //   tx = anchorLayout * (pinchZoom0 - newZoom)
+        // (Derivation: visual_x of anchor pre-pinch = playLeft + anchorLayout
+        // × pinchZoom0; post-transform = playLeft + anchorLayout × newZoom
+        // + tx; equate, solve for tx.)
         const z = pinchPendingZoom;
-        const wantL = pinchAnchorCX * z - (pinchPendingMid.x - rect.left);
-        const wantT = pinchAnchorCY * z - (pinchPendingMid.y - rect.top);
-        const maxL = Math.max(0, playW * z - cw);
-        const maxT = Math.max(0, playH * z + marginTop * z - ch);
-        const scrollL = Math.max(0, Math.min(wantL, maxL));
-        const scrollT = Math.max(0, Math.min(wantT, maxT));
-        const hMargin = playW * z <= cw ? (cw - playW * z) / 2 : 0;
-        const postLeft = rect.left + hMargin - scrollL;
-        const postTop  = rect.top + marginTop * z - scrollT;
-        const tx = postLeft - pinchStartPlayLeft;
-        const ty = postTop  - pinchStartPlayTop;
-        pinchPlayArea.style.transform = `translate(${tx}px, ${ty}px) scale(${scaleRel})`;
+        const tx = pinchAnchorCX * (pinchZoom0 - z);
+        const ty = pinchAnchorCY * (pinchZoom0 - z);
+        pinchPlayArea.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
         pinchPendingMid = null;
+        // Live label update so the user sees the % change as they pinch.
+        updateZoomButtonsState();
     };
     window.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 2) return;
-        // A card drag/pan already owns the gesture — do NOT start pinching.
-        // Otherwise lifting a second finger mid-drag would zoom the screen
-        // while the user is still moving a card.
-        if (window._cardDragActive) return;
         const appRoot = document.getElementById('app-root');
         if (!appRoot || !appRoot.contains(e.target)) return;
+        // Record starting state, but DON'T engage the pinch yet. We only
+        // engage once both fingers have moved past the deadzone.
         pinchDist0 = tDist(e.touches[0], e.touches[1]);
         pinchZoom0 = getUserZoom();
-        const mid = tMid(e.touches[0], e.touches[1]);
         const rect = appRoot.getBoundingClientRect();
-        // Convert screen midpoint → unzoomed content coord. With CSS
-        // `zoom: z` on .play-area, scroll values are in zoomed doc pixels,
-        // so we divide by z to get the pre-zoom content position.
-        pinchAnchorCX = (appRoot.scrollLeft + (mid.x - rect.left)) / pinchZoom0;
-        pinchAnchorCY = (appRoot.scrollTop  + (mid.y - rect.top )) / pinchZoom0;
-        pinchAnchorMidX = mid.x;
-        pinchAnchorMidY = mid.y;
+        // ANCHOR = viewport centre (not finger midpoint). Two reasons:
+        //   1. The visually centred content stays put during zoom — the
+        //      board doesn't appear to slide as the user adjusts their grip.
+        //   2. On commit, margin:auto re-centres the play-area in the narrow
+        //      case, putting the same content back at viewport centre — no
+        //      jump because the post-commit position already matches the
+        //      pinch-end visual.
+        const vcX = rect.left + appRoot.clientWidth  / 2;
+        const vcY = rect.top  + appRoot.clientHeight / 2;
+        // Local anchor coords: subtract play-area's ACTUAL screen rect
+        // (accounts for the CSS-zoom centring shift when play-area is
+        // narrower than the viewport). Without this the math was off by
+        // h_margin/pinchZoom0 and the anchor drifted on zoom-out.
+        const _pa = document.getElementById('play-area');
+        const _paRect = _pa ? _pa.getBoundingClientRect() : rect;
+        pinchAnchorCX = (vcX - _paRect.left) / pinchZoom0;
+        pinchAnchorCY = (vcY - _paRect.top ) / pinchZoom0;
+        pinchAnchorMidX = vcX;
+        pinchAnchorMidY = vcY;
+        pinchIdA = e.touches[0].identifier;
+        pinchIdB = e.touches[1].identifier;
+        pinchA0X = e.touches[0].clientX;
+        pinchA0Y = e.touches[0].clientY;
+        pinchB0X = e.touches[1].clientX;
+        pinchB0Y = e.touches[1].clientY;
+        pinchEngaged = false;
+    }, { passive: true });
+    // Promote the pre-armed touchstart into a real pinch: cancel any card
+    // drag, snapshot the play-area's screen rect for the transform math,
+    // mark _pinchActive so subsequent pointer/long-press logic stays out
+    // of the way. Called only once per gesture, when the deadzone is
+    // crossed in touchmove.
+    const engagePinch = () => {
+        pinchEngaged = true;
         window._pinchActive = true;
         releaseCardPointers();
-        // Switch to transform-driven mode for the gesture. Save the inline
-        // transform/origin (rare — usually empty) so we can restore on end.
         pinchPlayArea = document.getElementById('play-area');
         if (pinchPlayArea) {
             pinchPrevTransform = pinchPlayArea.style.transform || '';
             pinchPrevOrigin = pinchPlayArea.style.transformOrigin || '';
-            // Snapshot the play-area's actual pre-pinch screen position.
-            // flushPinch projects the post-commit position for each frame
-            // and translates from THIS baseline to land there — that way
-            // any pre-existing scroll/centring is automatically accounted
-            // for. Computing it analytically per-frame was off by exactly
-            // appRoot.scrollLeft when the user had scrolled before pinching.
             const startRect = pinchPlayArea.getBoundingClientRect();
             pinchStartPlayLeft = startRect.left;
             pinchStartPlayTop  = startRect.top;
             pinchPlayArea.style.transformOrigin = '0 0';
             pinchPlayArea.style.willChange = 'transform';
         }
-    }, { passive: true });
+    };
     window.addEventListener('touchmove', (e) => {
         if (e.touches.length !== 2 || pinchDist0 <= 0) return;
         const appRoot = document.getElementById('app-root');
         if (!appRoot || !appRoot.contains(e.target)) return;
+        // Find the SAME two fingers we armed with at touchstart — by their
+        // stable identifier, not by index (a third finger could shuffle the
+        // order). If one of them is gone, the gesture is no longer a pinch.
+        let tA = null, tB = null;
+        for (const t of e.touches) {
+            if      (t.identifier === pinchIdA) tA = t;
+            else if (t.identifier === pinchIdB) tB = t;
+        }
+        if (!tA || !tB) return;
+        // Deadzone gate: until BOTH fingers have moved a meaningful amount
+        // AND the inter-finger distance has changed meaningfully, the
+        // gesture stays dormant. Suppresses one-finger-stationary jitter
+        // that used to register as zoom + pan because the midpoint shifted.
+        if (!pinchEngaged) {
+            const movedA = Math.hypot(tA.clientX - pinchA0X, tA.clientY - pinchA0Y);
+            const movedB = Math.hypot(tB.clientX - pinchB0X, tB.clientY - pinchB0Y);
+            const distChange = Math.abs(tDist(tA, tB) - pinchDist0);
+            if (movedA < PINCH_FINGER_DEADZONE
+                    || movedB < PINCH_FINGER_DEADZONE
+                    || distChange < PINCH_DIST_DEADZONE) {
+                return;
+            }
+            engagePinch();
+            // Re-anchor at viewport centre (same logic as touchstart) so
+            // the gesture's fixed point is always the play-area's visual
+            // centre. After engagePinch, pinchPlayArea is set, so we use
+            // it directly to read the post-engagement screen rect.
+            const rect = appRoot.getBoundingClientRect();
+            const vcX = rect.left + appRoot.clientWidth  / 2;
+            const vcY = rect.top  + appRoot.clientHeight / 2;
+            pinchDist0 = tDist(tA, tB);
+            pinchZoom0 = getUserZoom();
+            const paRect = pinchPlayArea
+                ? pinchPlayArea.getBoundingClientRect()
+                : rect;
+            pinchAnchorCX = (vcX - paRect.left) / pinchZoom0;
+            pinchAnchorCY = (vcY - paRect.top ) / pinchZoom0;
+            pinchAnchorMidX = vcX;
+            pinchAnchorMidY = vcY;
+        }
         e.preventDefault();
-        const dist = tDist(e.touches[0], e.touches[1]);
+        const dist = tDist(tA, tB);
         // Quantise to 1 % steps so the pinch tracks finger motion smoothly.
         const newZoom = clampZoom(Math.round(pinchZoom0 * (dist / pinchDist0) * 100) / 100);
         state.userZoom = newZoom;
         pinchPendingZoom = newZoom;
-        pinchPendingMid  = tMid(e.touches[0], e.touches[1]);
+        pinchPendingMid  = tMid(tA, tB);
         if (!pinchRAF) pinchRAF = requestAnimationFrame(flushPinch);
     }, { passive: false });
     const endPinch = (e) => {
@@ -2262,30 +2455,24 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
             pinchDist0 = 0;
             window._pinchActive = false;
             if (pinchRAF) { cancelAnimationFrame(pinchRAF); pinchRAF = 0; }
-            const appRoot = document.getElementById('app-root');
             const finalZoom = pinchPendingZoom || state.userZoom;
-            if (appRoot && pinchPlayArea) {
-                const midX = (pinchPendingMid && pinchPendingMid.x) || pinchAnchorMidX;
-                const midY = (pinchPendingMid && pinchPendingMid.y) || pinchAnchorMidY;
-                // The flush-pinch clamp guarantees the gesture's final
-                // visual matches what the post-commit centred layout would
-                // show (when zoom < 1) OR can be reached by scroll (when
-                // zoom ≥ 1). So: clear the inline transform, commit the new
-                // CSS zoom, and set scroll for the wide case. No measure,
-                // no residual animation — both states render identically.
-                pinchPlayArea.style.transform = pinchPrevTransform;
-                pinchPlayArea.style.transformOrigin = pinchPrevOrigin;
-                pinchPlayArea.style.willChange = '';
-                appRoot.style.setProperty('--play-zoom', finalZoom);
-                const rect = appRoot.getBoundingClientRect();
-                const wantL = pinchAnchorCX * finalZoom - (midX - rect.left);
-                const wantT = pinchAnchorCY * finalZoom - (midY - rect.top);
-                // Browser clamps to [0, maxScroll]; that's exactly what we
-                // want — the clamp absorbed any out-of-range case during
-                // the gesture, so the clamp here is a no-op for those.
-                appRoot.scrollLeft = wantL;
-                appRoot.scrollTop  = wantT;
-            }
+            // Commit: state.userZoom + applyVisualZoom updates --play-zoom,
+            // the wrap's scaled scroll dimensions, the symmetric margins,
+            // and clears the inline transform. centerScroll then puts the
+            // user at the wrap's centre with equal scroll room both ways.
+            //
+            // Same code path as the zoom buttons — which the user confirmed
+            // works correctly. We deliberately do NOT add a visual-position
+            // "compensation" on play-area (inline left/top): when non-zero
+            // it shifts the play-area outside the wrap's box, the wrap's
+            // scrollWidth/Height doesn't include the overhang, and the user
+            // ends up with asymmetric scroll range (further on one side than
+            // the other). The anchor-at-viewport-centre pinch math already
+            // matches what applyVisualZoom + centerScroll produces in the
+            // typical case (no pre-pinch scroll), so no jump.
+            state.userZoom = finalZoom;
+            applyVisualZoom();
+            centerScroll();
             pinchPlayArea = null;
             pinchPendingMid = null;
             saveSettings();
@@ -2865,6 +3052,12 @@ function makePlayPetal(id) {
     let prevInline = null;
     let activePointerId = null;
     let liftedAngleDeg = 0;       // visual rotation (degrees) carried during drag
+    // Rolling sample of the last finger position + timestamp during a
+    // panning move. On touchend we use these to compute the release
+    // velocity that feeds startMomentum (pan inertia).
+    let panLastT = 0;
+    let panLastX = 0, panLastY = 0;
+    let panVX = 0, panVY = 0;
 
     function liftCard() {
         // Determine the card's current visual rotation (degrees). If it was
@@ -2972,11 +3165,14 @@ function makePlayPetal(id) {
 
     card.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
-        // Pinch-zoom owns the gesture: don't capture, don't arm long-press,
-        // and don't let an existing drag continue. Otherwise this handler's
-        // pointermove fights the pinch handler for control of scrollLeft/Top
-        // and the card visibly drifts while the user is just zooming.
-        if (window._pinchActive) return;
+        // Multi-touch (2+ fingers on screen) owns the gesture — never start
+        // a card drag. Catches both: (a) finger 2 landing while finger 1
+        // was already arming a drag on a card, and (b) finger 1 landing
+        // on a card while finger 2 is already down somewhere else.
+        if (window._multiTouchActive) return;
+        // A fresh touch stops any in-flight inertial scroll so the user
+        // can "grab" a moving board to halt it.
+        cancelMomentum();
         e.preventDefault();
         try { card.setPointerCapture(e.pointerId); } catch {}
         activePointerId = e.pointerId;
@@ -2990,22 +3186,23 @@ function makePlayPetal(id) {
             const sc = document.getElementById('app-root');
             panStartScrollLeft = sc ? sc.scrollLeft : 0;
             panStartScrollTop  = sc ? sc.scrollTop  : 0;
+            // Seed velocity tracking with the start point; the first move
+            // produces a real sample.
+            panLastT = performance.now();
+            panLastX = e.clientX;
+            panLastY = e.clientY;
+            panVX = 0;
+            panVY = 0;
             longPressTimer = setTimeout(() => {
-                // A pinch took over before the long-press fired — bail so we
-                // don't promote into a drag mid-pinch. (releaseCardPointers
-                // can't cancel a pending setTimeout from a different scope;
-                // the timer has to check the flag itself.)
-                if (window._pinchActive) return;
+                // A second finger landed before the long-press fired — bail
+                // so the touch doesn't promote into a drag mid-pinch.
+                if (window._multiTouchActive) return;
                 if (mode !== 'pending') return;
                 mode = 'dragging';
                 suppressClick = true;
                 if (navigator.vibrate) navigator.vibrate(15);
                 card.classList.add('picked-up');
                 liftCard();
-                // Mark the drag globally so a second-finger pinch starting
-                // mid-drag is suppressed (pinch-zoom must not steal an
-                // in-progress drag).
-                window._cardDragActive = true;
             }, LONG_PRESS_MS);
         }
     });
@@ -3013,11 +3210,9 @@ function makePlayPetal(id) {
     card.addEventListener('pointermove', (e) => {
         if (e.pointerId !== activePointerId) return;
         if (mode === 'idle') return;
-        // A second finger landed → pinch took over. Cancel the long-press,
-        // stop tracking this pointer, and leave scroll alone so the pinch
-        // handler is the sole writer of scrollLeft/Top for the rest of the
-        // gesture.
-        if (window._pinchActive) {
+        // A second finger landed → multi-touch took over. Cancel the
+        // long-press, stop tracking this pointer, leave scroll alone.
+        if (window._multiTouchActive) {
             if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
             activePointerId = null;
             mode = 'idle';
@@ -3037,12 +3232,10 @@ function makePlayPetal(id) {
                 suppressClick = true;
                 card.classList.add('picked-up');
                 liftCard();
-                window._cardDragActive = true;
             } else if (e.pointerType === 'touch' && moved > 8) {
                 if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
                 mode = 'panning';
                 suppressClick = true;
-                window._cardDragActive = true;
             } else {
                 return;
             }
@@ -3055,6 +3248,17 @@ function makePlayPetal(id) {
                 sc.scrollLeft = panStartScrollLeft - dx;
                 sc.scrollTop  = panStartScrollTop  - dy;
             }
+            // Update velocity sample for momentum (px/ms). Skip degenerate
+            // dt to avoid NaN; on the next move we'll get a real sample.
+            const now = performance.now();
+            const dtm = now - panLastT;
+            if (dtm > 0) {
+                panVX = (e.clientX - panLastX) / dtm;
+                panVY = (e.clientY - panLastY) / dtm;
+            }
+            panLastT = now;
+            panLastX = e.clientX;
+            panLastY = e.clientY;
             return;
         }
 
@@ -3080,13 +3284,13 @@ function makePlayPetal(id) {
         stopEdgeScroll();
         const prevMode = mode;
         mode = 'idle';
-        // Release the drag-active gate so pinch can be initiated next.
-        window._cardDragActive = false;
         if (prevMode === 'pending' || prevMode === 'idle') return;
         if (prevMode === 'panning') {
-            // Manual scroll-with-touch ended — nothing to clean up; the
-            // suppressClick flag set by the move handler keeps a stray click
-            // from firing after a flicked scroll.
+            // Flick the residual velocity into the inertial-scroll
+            // momentum runner so the board keeps gliding briefly after
+            // the user lifts, matching the native mobile feel. A quick
+            // tap (velocity ≈ 0) becomes a no-op.
+            startMomentum(panVX, panVY);
             return;
         }
         card.classList.remove('picked-up');

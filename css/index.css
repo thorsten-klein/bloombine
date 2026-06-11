@@ -854,15 +854,31 @@ body[data-screen="create"] .flower-board {
     margin-bottom: 0;
 }
 
-.play-area {
-    /* Zoom is applied here (a child of #app-root). Scaling on the CONTENT
-       keeps #app-root at its natural size, so the scrollbar sits at the
-       viewport edge and horizontal scrolling works at zoom > 100 %. */
-    zoom: var(--play-zoom, 1);
+/* Wrap owns the SCALED scroll dimensions (playW × userZoom, playH × userZoom)
+   and the toolbar offset. Positioned at the start of #app-root's cross axis
+   (left in LTR) — NOT flex-centred — because flex-centred items overflow
+   into the negative-offset region which Chromium's LTR scroll cannot reach.
+   For narrow zooms (wrap < viewport) JS sets `margin-left` to centre it
+   visually; for wide zooms `margin-left: 0` keeps the wrap at offsetLeft 0
+   so its full width is in the positive scroll region and the user can
+   scroll BOTH directions via the natural [0, overflow] range. */
+.play-wrap {
     position: relative;
     flex-shrink: 0;
-    margin: 0 auto;
-    touch-action: pan-x pan-y;
+    align-self: flex-start;
+}
+.play-area {
+    /* Visual zoom = transform: scale. transform-origin (0,0) means the
+       element's top-left stays at the wrap's top-left across zoom changes
+       — no layout shift, no margin re-compute, just a paint/composite
+       change. CSS `zoom` (the previous approach) re-centred the play-area
+       via margin: auto whenever its effective width changed, producing
+       the pinch-end jump in the narrow case. */
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+    transform: scale(var(--play-zoom, 1));
 }
 /* In the play screen the petal-words were rendering bigger than necessary
    (the original 10cqw/max 1.4rem clamp was tuned for the smaller create
