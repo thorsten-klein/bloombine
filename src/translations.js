@@ -88,7 +88,7 @@ window.TRANSLATIONS = {
         // Placeholders: {play} = play-button label, {extras} = decoy count,
         // {decoysWord} = singular/plural noun (handled in main.js).
         infoCreateHtml: '<h3>Clue-giving phase</h3>'
-            + '<p>Each green badge sits between two petals — read the two words touching that boundary (the right edge of the left petal and the left edge of the right petal) and write one word that links them both. Your clue may not contain either petal word.</p>'
+            + '<p>Each green badge sits between / above two petals — read the two words touching that boundary (the right edge of the left petal and the left edge of the right petal) and write one word that links them both. Your clue may not contain either petal word.</p>'
             + '<h3>What happens next</h3>'
             + '<ol>'
             + '<li>Tap the <strong>share</strong> icon to copy a link other players can open, or hand the device to them.</li>'
@@ -96,11 +96,11 @@ window.TRANSLATIONS = {
             + '<li>The other players drag each petal into a flower-slot and click it to rotate, until every boundary\'s two visible words fit your clue.</li>'
             + '</ol>',
         infoPlayHtml: '<h3>Goal</h3>'
-            + '<p>Place every petal in the right slot at the right rotation, so each green clue badge sits between the two petal-words it describes.</p>'
+            + '<p>Place every petal in the right slot at the right rotation, so each green clue badge sits between / above the two petal-words it describes.</p>'
             + '<h3>Petal mechanics</h3>'
             + '<ul>'
             + '<li>Each diamond petal has <strong>4 words</strong>, one per edge.</li>'
-            + '<li>The two top edges of adjacent petals (right edge of the left petal + left edge of the right petal) are what the clue between them refers to.</li>'
+            + '<li>The two top edges of adjacent petals (right edge of the left petal + left edge of the right petal) are what the clue between / above them refers to.</li>'
             + '<li><strong>Drag</strong> a petal onto a flower-slot to place it.</li>'
             + '<li><strong>Click</strong> a petal to rotate it 90° clockwise — there is no separate rotate icon.</li>'
             + '<li>Some petals are <strong>decoys</strong>: they don\'t belong in any slot. Leave them outside the flower.</li>'
@@ -223,7 +223,7 @@ window.TRANSLATIONS = {
         info:               'Info',
         // Info popup content (HTML). Placeholders match the en block.
         infoCreateHtml: '<h3>Hinweisphase</h3>'
-            + '<p>Jedes grüne Schild liegt zwischen zwei Blütenblättern — lies die beiden Wörter, die an dieser Grenze aneinanderstoßen (die rechte Kante des linken Blütenblatts und die linke Kante des rechten Blütenblatts), und schreibe ein Wort, das beide verbindet. Dein Hinweis darf keines der beiden Blütenblatt-Wörter enthalten.</p>'
+            + '<p>Jedes grüne Schild liegt zwischen bzw- über zwei Blütenblättern — lies die beiden Wörter, die an dieser Grenze aneinanderstoßen (die rechte Kante des linken Blütenblatts und die linke Kante des rechten Blütenblatts), und schreibe ein Wort, das beide verbindet. Dein Hinweis darf keines der beiden Blütenblatt-Wörter enthalten.</p>'
             + '<h3>Wie es weitergeht</h3>'
             + '<ol>'
             + '<li>Tippe auf das <strong>Teilen</strong>-Symbol, um einen Link zu kopieren, den andere Spieler öffnen können, oder reiche das Gerät weiter.</li>'
@@ -231,7 +231,7 @@ window.TRANSLATIONS = {
             + '<li>Die anderen Spieler ziehen jedes Blütenblatt in einen Slot und tippen zum Drehen darauf, bis an jeder Grenze die beiden sichtbaren Wörter zum Hinweis passen.</li>'
             + '</ol>',
         infoPlayHtml: '<h3>Ziel</h3>'
-            + '<p>Platziere jedes Blütenblatt im richtigen Slot mit der richtigen Drehung, sodass jedes grüne Hinweis-Schild zwischen den beiden Wörtern liegt, die es beschreibt.</p>'
+            + '<p>Platziere jedes Blütenblatt im richtigen Slot mit der richtigen Drehung, sodass jedes grüne Hinweis-Schild zwischen/über den beiden Wörtern liegt, die es beschreibt.</p>'
             + '<h3>So funktionieren die Blütenblätter</h3>'
             + '<ul>'
             + '<li>Jedes rautenförmige Blütenblatt hat <strong>4 Wörter</strong>, eines pro Kante.</li>'

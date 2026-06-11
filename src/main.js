@@ -1818,12 +1818,6 @@ function renderPlay() {
     // and re-runs the whole render, repeating until everything fits.
     let flowerSize = Math.max(120, fitMax * getZoom());
     state.cardSize = sd * flowerSize;
-    console.log('[arrange] dims', {
-        createMode, n: state.n, e: state.e,
-        usableW, usableH, isPortrait,
-        fitMax, zoom: getZoom(), userZoom: getUserZoom(),
-        flowerSize, cardSize: state.cardSize,
-    });
 
     // Build the board first so we know its exact (boardW × boardH) — those
     // become the play-area's dimensions (play-area = flower-board).
@@ -2008,12 +2002,6 @@ function renderPlay() {
     if (extended > 0) {
         playArea.style.height = (playH + extended) + 'px';
     }
-    console.log('[arrange] placement', {
-        needPositions: needPositions.length,
-        newSlots: newSlots.length,
-        extended,
-        playW, playH: playH + extended,
-    });
     // Last-resort shrink: extension hit MAX_EXTEND and still didn't fit them
     // all. Shrink the flower one step and re-render. (Rare — usually the
     // extension path finds room first.)
@@ -2021,9 +2009,6 @@ function renderPlay() {
             && getZoom() > ZOOM_MIN + 1e-6) {
         const nextZoom = Math.max(ZOOM_MIN,
             Math.round((getZoom() - 0.1) * 10) / 10);
-        console.log('[arrange] last-resort shrink', {
-            from: getZoom(), to: nextZoom,
-        });
         queueMicrotask(() => {
             const screen = document.body.dataset.screen;
             if (screen !== 'play' && screen !== 'create') return;
@@ -2058,7 +2043,6 @@ function renderPlay() {
         }
     });
 
-    const appendLog = { slotted: 0, tray: 0, slotMissing: 0, posMissing: 0 };
     state.palette.forEach((id) => {
         const card = makePlayPetal(id);
         card.style.width  = state.cardSize + 'px';
@@ -2069,30 +2053,21 @@ function renderPlay() {
             for (const k in state.placements) {
                 if (state.placements[k] === id) { slotIdx = parseInt(k, 10); break; }
             }
-            if (slotIdx == null) { appendLog.slotMissing++; return; }
+            if (slotIdx == null) return;
             const slotDrop = document.querySelector(
                 `.flower-slot[data-slot="${slotIdx}"] .slot-drop`);
             if (slotDrop) {
                 slotDrop.appendChild(card);
                 card.style.left = '';
                 card.style.top  = '';
-                appendLog.slotted++;
-            } else {
-                appendLog.slotMissing++;
             }
         } else {
             const pos = state.trayPositions[id];
-            if (!pos) { appendLog.posMissing++; return; }
+            if (!pos) return;
             card.style.left = pos.x + 'px';
             card.style.top = pos.y + 'px';
             playArea.appendChild(card);
-            appendLog.tray++;
         }
-    });
-    console.log('[arrange] appended', {
-        paletteSize: state.palette.length,
-        placedIdsCount: placedIds.size,
-        ...appendLog,
     });
 
     // (Auto-fit happens up above, BEFORE positions are committed: if not
@@ -2152,36 +2127,89 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
     // Single source of truth: while this is true, the card pointer logic
     // (drag / pan / long-press) MUST stay out of the way — otherwise its
     // pointermove writes to appRoot.scrollLeft on every move and competes
-    // with the pinch's own anchor-based scroll, producing the "card moves
-    // while pinching" drift and the per-frame scroll flicker.
+    // with the pinch handler.
     window._pinchActive = false;
-    // Coalesce per-touchmove DOM writes into one rAF — phones fire many
-    // touchmove events per frame, and writing --play-zoom + scrollLeft/Top
-    // on every one of them churns the compositor and reads as jank.
+    // While the pinch is in progress we drive .play-area with `transform:
+    // scale+translate` (paint/composite only — GPU-accelerated, no layout).
+    // CSS `zoom` is a LAYOUT property: setting it per frame retriggers
+    // layout for every descendant (slots, badges, cards, container-queries
+    // on .petal-card recomputing 4× per card) which is the source of the
+    // pinch lag on phones. On touchend we commit the final value back to
+    // `--play-zoom` (one layout) and clear the inline transform.
     let pinchPendingMid = null;
     let pinchPendingZoom = 0;
     let pinchRAF = 0;
+    let pinchAnchorMidX = 0;     // initial midpoint, screen coords
+    let pinchAnchorMidY = 0;
+    let pinchStartPlayLeft = 0;  // play-area screen rect at touchstart
+    let pinchStartPlayTop  = 0;
+    let pinchPlayArea = null;
+    let pinchPrevTransform = '';
+    let pinchPrevOrigin = '';
     const releaseCardPointers = () => {
-        // Cancel any in-flight card drag/pan so it doesn't keep writing
-        // scroll. Cards expose this via setPointerCapture; releasing all
-        // captured pointers also stops further pointermove on them.
         document.querySelectorAll('.petal-card').forEach((c) => {
             try { c.releasePointerCapture && c.releasePointerCapture(0); } catch {}
+            // Synthesize a pointercancel so the card's pointerdown closure
+            // tears down its long-press timer and in-flight drag state. The
+            // closure's `mode` and `longPressTimer` live in its own scope —
+            // releasing capture alone doesn't reach them; pointercancel does
+            // (the card listens to it via endPointer).
+            try {
+                c.dispatchEvent(new PointerEvent('pointercancel', {
+                    bubbles: true, cancelable: true, pointerId: 0,
+                }));
+            } catch {}
         });
     };
     const flushPinch = () => {
         pinchRAF = 0;
-        if (!window._pinchActive || !pinchPendingMid) return;
+        if (!window._pinchActive || !pinchPendingMid || !pinchPlayArea) return;
         const appRoot = document.getElementById('app-root');
         if (!appRoot) return;
+        const scaleRel = pinchPendingZoom / pinchZoom0;
         const rect = appRoot.getBoundingClientRect();
-        appRoot.style.setProperty('--play-zoom', pinchPendingZoom);
-        appRoot.scrollLeft = pinchAnchorCX * pinchPendingZoom - (pinchPendingMid.x - rect.left);
-        appRoot.scrollTop  = pinchAnchorCY * pinchPendingZoom - (pinchPendingMid.y - rect.top);
+        const cw = appRoot.clientWidth;
+        const ch = appRoot.clientHeight;
+        const playW = parseFloat(pinchPlayArea.style.width)  || cw;
+        const playH = parseFloat(pinchPlayArea.style.height) || ch;
+        const marginTop = parseFloat(pinchPlayArea.style.marginTop) || 0;
+        // Compute, axis-by-axis, where the play-area's top-left WILL BE on
+        // commit (when the CSS-zoom layout takes over). The transform must
+        // place it there NOW so pinch-end visual = post-commit visual ⇒
+        // zero settle.
+        //
+        // Single continuous formula: simulate what the browser does on
+        // commit — apply CSS zoom (effective dims = playW*z + marginTop*z
+        // for the box), compute the anchor-pinning scroll target, CLAMP
+        // scroll to [0, max], then derive play-area top-left from the
+        // clamped scroll. This handles narrow (scroll clamped to 0, play-
+        // area centred / top-pinned) AND wide (scroll absorbs the anchor
+        // position) with the SAME expression, so the regimes connect
+        // smoothly during the gesture too.
+        //
+        // CSS `zoom` scales the element's box AND its margins/centring,
+        // hence the *z multipliers throughout.
+        const z = pinchPendingZoom;
+        const wantL = pinchAnchorCX * z - (pinchPendingMid.x - rect.left);
+        const wantT = pinchAnchorCY * z - (pinchPendingMid.y - rect.top);
+        const maxL = Math.max(0, playW * z - cw);
+        const maxT = Math.max(0, playH * z + marginTop * z - ch);
+        const scrollL = Math.max(0, Math.min(wantL, maxL));
+        const scrollT = Math.max(0, Math.min(wantT, maxT));
+        const hMargin = playW * z <= cw ? (cw - playW * z) / 2 : 0;
+        const postLeft = rect.left + hMargin - scrollL;
+        const postTop  = rect.top + marginTop * z - scrollT;
+        const tx = postLeft - pinchStartPlayLeft;
+        const ty = postTop  - pinchStartPlayTop;
+        pinchPlayArea.style.transform = `translate(${tx}px, ${ty}px) scale(${scaleRel})`;
         pinchPendingMid = null;
     };
     window.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 2) return;
+        // A card drag/pan already owns the gesture — do NOT start pinching.
+        // Otherwise lifting a second finger mid-drag would zoom the screen
+        // while the user is still moving a card.
+        if (window._cardDragActive) return;
         const appRoot = document.getElementById('app-root');
         if (!appRoot || !appRoot.contains(e.target)) return;
         pinchDist0 = tDist(e.touches[0], e.touches[1]);
@@ -2193,11 +2221,28 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
         // so we divide by z to get the pre-zoom content position.
         pinchAnchorCX = (appRoot.scrollLeft + (mid.x - rect.left)) / pinchZoom0;
         pinchAnchorCY = (appRoot.scrollTop  + (mid.y - rect.top )) / pinchZoom0;
+        pinchAnchorMidX = mid.x;
+        pinchAnchorMidY = mid.y;
         window._pinchActive = true;
-        // If a card has already armed/started a drag with finger 1, kill it
-        // now so its pointermove doesn't fight the pinch for control of
-        // scroll for the rest of the gesture.
         releaseCardPointers();
+        // Switch to transform-driven mode for the gesture. Save the inline
+        // transform/origin (rare — usually empty) so we can restore on end.
+        pinchPlayArea = document.getElementById('play-area');
+        if (pinchPlayArea) {
+            pinchPrevTransform = pinchPlayArea.style.transform || '';
+            pinchPrevOrigin = pinchPlayArea.style.transformOrigin || '';
+            // Snapshot the play-area's actual pre-pinch screen position.
+            // flushPinch projects the post-commit position for each frame
+            // and translates from THIS baseline to land there — that way
+            // any pre-existing scroll/centring is automatically accounted
+            // for. Computing it analytically per-frame was off by exactly
+            // appRoot.scrollLeft when the user had scrolled before pinching.
+            const startRect = pinchPlayArea.getBoundingClientRect();
+            pinchStartPlayLeft = startRect.left;
+            pinchStartPlayTop  = startRect.top;
+            pinchPlayArea.style.transformOrigin = '0 0';
+            pinchPlayArea.style.willChange = 'transform';
+        }
     }, { passive: true });
     window.addEventListener('touchmove', (e) => {
         if (e.touches.length !== 2 || pinchDist0 <= 0) return;
@@ -2206,11 +2251,7 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
         e.preventDefault();
         const dist = tDist(e.touches[0], e.touches[1]);
         // Quantise to 1 % steps so the pinch tracks finger motion smoothly.
-        // The earlier 10 % step felt notchy — the flower jumped in big
-        // chunks. Per-frame churn is no longer a worry because the rAF
-        // flush below batches everything into one write per frame.
         const newZoom = clampZoom(Math.round(pinchZoom0 * (dist / pinchDist0) * 100) / 100);
-        // Stage the latest values; flush at most once per frame.
         state.userZoom = newZoom;
         pinchPendingZoom = newZoom;
         pinchPendingMid  = tMid(e.touches[0], e.touches[1]);
@@ -2221,8 +2262,32 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
             pinchDist0 = 0;
             window._pinchActive = false;
             if (pinchRAF) { cancelAnimationFrame(pinchRAF); pinchRAF = 0; }
-            flushPinch();    // make sure the final value is applied
-            // Commit the gesture's final zoom: persist + refresh label.
+            const appRoot = document.getElementById('app-root');
+            const finalZoom = pinchPendingZoom || state.userZoom;
+            if (appRoot && pinchPlayArea) {
+                const midX = (pinchPendingMid && pinchPendingMid.x) || pinchAnchorMidX;
+                const midY = (pinchPendingMid && pinchPendingMid.y) || pinchAnchorMidY;
+                // The flush-pinch clamp guarantees the gesture's final
+                // visual matches what the post-commit centred layout would
+                // show (when zoom < 1) OR can be reached by scroll (when
+                // zoom ≥ 1). So: clear the inline transform, commit the new
+                // CSS zoom, and set scroll for the wide case. No measure,
+                // no residual animation — both states render identically.
+                pinchPlayArea.style.transform = pinchPrevTransform;
+                pinchPlayArea.style.transformOrigin = pinchPrevOrigin;
+                pinchPlayArea.style.willChange = '';
+                appRoot.style.setProperty('--play-zoom', finalZoom);
+                const rect = appRoot.getBoundingClientRect();
+                const wantL = pinchAnchorCX * finalZoom - (midX - rect.left);
+                const wantT = pinchAnchorCY * finalZoom - (midY - rect.top);
+                // Browser clamps to [0, maxScroll]; that's exactly what we
+                // want — the clamp absorbed any out-of-range case during
+                // the gesture, so the clamp here is a no-op for those.
+                appRoot.scrollLeft = wantL;
+                appRoot.scrollTop  = wantT;
+            }
+            pinchPlayArea = null;
+            pinchPendingMid = null;
             saveSettings();
             updateZoomButtonsState();
         }
@@ -2926,12 +2991,21 @@ function makePlayPetal(id) {
             panStartScrollLeft = sc ? sc.scrollLeft : 0;
             panStartScrollTop  = sc ? sc.scrollTop  : 0;
             longPressTimer = setTimeout(() => {
+                // A pinch took over before the long-press fired — bail so we
+                // don't promote into a drag mid-pinch. (releaseCardPointers
+                // can't cancel a pending setTimeout from a different scope;
+                // the timer has to check the flag itself.)
+                if (window._pinchActive) return;
                 if (mode !== 'pending') return;
                 mode = 'dragging';
                 suppressClick = true;
                 if (navigator.vibrate) navigator.vibrate(15);
                 card.classList.add('picked-up');
                 liftCard();
+                // Mark the drag globally so a second-finger pinch starting
+                // mid-drag is suppressed (pinch-zoom must not steal an
+                // in-progress drag).
+                window._cardDragActive = true;
             }, LONG_PRESS_MS);
         }
     });
@@ -2963,10 +3037,12 @@ function makePlayPetal(id) {
                 suppressClick = true;
                 card.classList.add('picked-up');
                 liftCard();
+                window._cardDragActive = true;
             } else if (e.pointerType === 'touch' && moved > 8) {
                 if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
                 mode = 'panning';
                 suppressClick = true;
+                window._cardDragActive = true;
             } else {
                 return;
             }
@@ -3004,6 +3080,8 @@ function makePlayPetal(id) {
         stopEdgeScroll();
         const prevMode = mode;
         mode = 'idle';
+        // Release the drag-active gate so pinch can be initiated next.
+        window._cardDragActive = false;
         if (prevMode === 'pending' || prevMode === 'idle') return;
         if (prevMode === 'panning') {
             // Manual scroll-with-touch ended — nothing to clean up; the
