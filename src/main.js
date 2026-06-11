@@ -52,10 +52,12 @@ const LANGS = {
     de: { name: 'Deutsch', key: 'German' },
 };
 const DEFAULT_LANG = 'de';
+const DEFAULT_UI_LANG = 'en';
 
 const state = {
+    uiLang: DEFAULT_UI_LANG,
     lang: DEFAULT_LANG,
-    n: 4,        // petals in the ring
+    n: 6,        // petals in the ring
     e: 1,        // extra decoy petals
     zoom: 1,     // LAYOUT scale (auto-fit only — re-renders & re-arranges)
     userZoom: 1, // VISUAL scale (manual zoom — CSS zoom, no re-arrange)
@@ -81,6 +83,11 @@ function clampZoom(z) {
     return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 }
 function loadSettings() {
+    // Always start from a known-good default; any saved override is then
+    // applied on top. Guarantees state.uiLang is always 'en' or 'de'
+    // (never undefined / unknown), so the renderSetup highlight logic
+    // always lights up exactly one flag.
+    state.uiLang = DEFAULT_UI_LANG;
     try {
         const raw = localStorage.getItem(SETTINGS_KEY);
         if (!raw) return;
@@ -88,6 +95,10 @@ function loadSettings() {
         if (Number.isInteger(s.n) && s.n >= 4 && s.n <= 12) state.n = s.n;
         if (Number.isInteger(s.e) && s.e >= 0) state.e = s.e;
         if (typeof s.lang === 'string' && LANGS[s.lang]) state.lang = s.lang;
+        if (typeof s.uiLang === 'string'
+            && window.TRANSLATIONS && window.TRANSLATIONS[s.uiLang]) {
+            state.uiLang = s.uiLang;
+        }
         if (typeof s.zoom === 'number') state.zoom = clampZoom(s.zoom);
         if (typeof s.userZoom === 'number') state.userZoom = clampZoom(s.userZoom);
     } catch {}
@@ -95,7 +106,7 @@ function loadSettings() {
 function saveSettings() {
     try {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-            n: state.n, e: state.e, lang: state.lang,
+            n: state.n, e: state.e, lang: state.lang, uiLang: state.uiLang,
             zoom: state.zoom, userZoom: state.userZoom,
         }));
     } catch {}
@@ -122,7 +133,6 @@ function saveGameState() {
             petalRot: state.petalRot,
             trayPositions: state.trayPositions,
             cardAngles: state.cardAngles,
-            locked: state.locked,
             tries: state.tries || 0,
         };
         localStorage.setItem(GAME_STATE_KEY, JSON.stringify(data));
@@ -161,7 +171,6 @@ function restoreGameState(d) {
         const savedRot = d.petalRot || {};
         const savedPos = d.trayPositions || {};
         const savedAng = d.cardAngles || {};
-        state.locked = d.locked || {};
         state.cardAngles = {};
         for (let i = 0; i < state.petals.length; i++) {
             const r = savedRot[i];
@@ -186,7 +195,6 @@ function restoreGameState(d) {
                 card.style.setProperty('--slot-angle', ang + 'deg');
                 applyCardAngleFlips(card, ang);
             }
-            if (state.locked[i]) applyLockVisual(card, true);
         }
         const savedPl = d.placements || {};
         for (const slotKey of Object.keys(savedPl)) {
@@ -200,7 +208,13 @@ function restoreGameState(d) {
 }
 
 function t(key, vars) {
-    let s = STRINGS[key] || key;
+    const all = (typeof window !== 'undefined' && window.TRANSLATIONS) || null;
+    // Lookup order: current UI language → English fallback → legacy STRINGS
+    // dict → raw key (so a missing key is obvious in the UI).
+    let s = (all && all[state.uiLang] && all[state.uiLang][key])
+         || (all && all.en          && all.en[key])
+         || STRINGS[key]
+         || key;
     if (vars) for (const k in vars) s = s.replace('{' + k + '}', vars[k]);
     return s;
 }
@@ -376,21 +390,20 @@ window.addEventListener('resize', () => {
 // ----- topbar slots (back-button on the far left, action buttons on the right) -----
 function setTopbarActions(...nodes) {
     const slot = document.getElementById('topbar-right');
-    if (slot) slot.replaceChildren(...nodes, makeFullscreenButton());
+    if (slot) slot.replaceChildren(...nodes, makeSettingsButton(), makeFullscreenButton());
 }
 // ----- Edge-scroll while dragging a card -----
-// When the cursor (during a drag) approaches a viewport edge we scroll
-// #app-root in that direction at a speed proportional to how close it is.
-// The lifted card is position:fixed so it stays glued to the cursor while
-// the world scrolls under it — no extra repositioning needed.
+// While the cursor (during a drag) is within EDGE_SCROLL_BAND of a viewport
+// edge, scroll #app-root in that direction at a speed proportional to how
+// close it is. The lifted card is position:fixed so it stays glued to the
+// cursor while the world scrolls beneath it.
 let _edgeScrollRAF = null;
 let _edgeScrollVX = 0;
 let _edgeScrollVY = 0;
-const EDGE_SCROLL_BAND = 80;       // px from a viewport edge that activates scroll
-const EDGE_SCROLL_MAX  = 24;       // max px per frame at the very edge
+const EDGE_SCROLL_BAND = 80;
+const EDGE_SCROLL_MAX  = 24;
 function updateEdgeScroll(clientX, clientY) {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
     let vx = 0, vy = 0;
     if (clientX < EDGE_SCROLL_BAND) {
         vx = -((EDGE_SCROLL_BAND - clientX) / EDGE_SCROLL_BAND) * EDGE_SCROLL_MAX;
@@ -402,14 +415,10 @@ function updateEdgeScroll(clientX, clientY) {
     } else if (vh - clientY < EDGE_SCROLL_BAND) {
         vy = ((EDGE_SCROLL_BAND - (vh - clientY)) / EDGE_SCROLL_BAND) * EDGE_SCROLL_MAX;
     }
-    _edgeScrollVX = vx;
-    _edgeScrollVY = vy;
+    _edgeScrollVX = vx; _edgeScrollVY = vy;
     if ((vx || vy) && _edgeScrollRAF == null) {
         const tick = () => {
-            if (_edgeScrollVX === 0 && _edgeScrollVY === 0) {
-                _edgeScrollRAF = null;
-                return;
-            }
+            if (_edgeScrollVX === 0 && _edgeScrollVY === 0) { _edgeScrollRAF = null; return; }
             const root = document.getElementById('app-root');
             if (root) {
                 root.scrollLeft += _edgeScrollVX;
@@ -421,15 +430,87 @@ function updateEdgeScroll(clientX, clientY) {
     }
 }
 function stopEdgeScroll() {
-    if (_edgeScrollRAF != null) {
-        cancelAnimationFrame(_edgeScrollRAF);
-        _edgeScrollRAF = null;
-    }
+    if (_edgeScrollRAF != null) { cancelAnimationFrame(_edgeScrollRAF); _edgeScrollRAF = null; }
     _edgeScrollVX = _edgeScrollVY = 0;
 }
-// Toggle between fullscreen and normal. Stays in sync with the actual
-// fullscreen state via the 'fullscreenchange' event below (handles
-// pressing Esc, the browser-supplied exit button, etc.).
+// ----- Persistent topbar tools: settings (gear) + fullscreen toggle -----
+// Both are appended to #topbar-right on every render so they're present on
+// the setup, create, and play screens.
+const FLAG_SVG = {
+    en: '<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg">'
+        + '<rect width="30" height="20" fill="#fff"/>'
+        + '<g fill="#b22234">'
+        +   '<rect width="30" height="1.54"/>'
+        +   '<rect y="3.08" width="30" height="1.54"/>'
+        +   '<rect y="6.15" width="30" height="1.54"/>'
+        +   '<rect y="9.23" width="30" height="1.54"/>'
+        +   '<rect y="12.31" width="30" height="1.54"/>'
+        +   '<rect y="15.38" width="30" height="1.54"/>'
+        +   '<rect y="18.46" width="30" height="1.54"/>'
+        + '</g>'
+        + '<rect width="12" height="10.77" fill="#3c3b6e"/>'
+        + '</svg>',
+    de: '<svg viewBox="0 0 30 18" xmlns="http://www.w3.org/2000/svg">'
+        + '<rect width="30" height="6" fill="#000"/>'
+        + '<rect y="6" width="30" height="6" fill="#dd0000"/>'
+        + '<rect y="12" width="30" height="6" fill="#ffce00"/>'
+        + '</svg>',
+};
+function makeSettingsButton() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn icon ghost settings-btn';
+    btn.id = 'btn-settings';
+    btn.title = t('settings');
+    btn.setAttribute('aria-label', t('settings'));
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        + '<circle cx="12" cy="12" r="3"/>'
+        + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+    btn.addEventListener('click', () => openSettingsModal());
+    return btn;
+}
+function openSettingsModal() {
+    const existing = document.getElementById('settings-overlay');
+    if (existing) existing.remove();
+    const overlay = el('div', { id: 'settings-overlay', class: 'popup-overlay' });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const box = el('div', { class: 'popup-box', style: 'max-width:380px;padding:1.2rem 1.4rem 1.4rem;' });
+    box.appendChild(el('button', {
+        type: 'button', class: 'popup-close', 'aria-label': t('cancel'),
+        onclick: () => overlay.remove(),
+    }, '×'));
+    const body = el('div', { class: 'popup-body' });
+    body.appendChild(el('h3', { style: 'margin:0 0 0.6rem;' }, t('settings')));
+    body.appendChild(el('div', { class: 'subtitle', style: 'margin:0 0 0.8rem;' }, t('chooseLanguage')));
+    const row = el('div', { class: 'settings-lang-row' });
+    const mk = (code, label) => {
+        const active = state.uiLang === code;
+        const b = el('button', {
+            type: 'button',
+            class: 'btn settings-lang-btn' + (active ? ' active' : ''),
+            'aria-label': label, title: label,
+            onclick: () => {
+                if (state.uiLang === code) { overlay.remove(); return; }
+                state.uiLang = code;
+                saveSettings();
+                overlay.remove();
+                const screen = document.body.dataset.screen;
+                if (screen === 'create')    { state.createMode = false; navigate('create'); }
+                else if (screen === 'play') { navigate('play'); }
+                else                        { navigate('setup'); }
+            },
+        });
+        b.innerHTML = `<span class="settings-flag" aria-hidden="true">${FLAG_SVG[code] || ''}</span>`;
+        return b;
+    };
+    row.appendChild(mk('en', t('english')));
+    row.appendChild(mk('de', t('german')));
+    body.appendChild(row);
+    box.appendChild(body);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+}
 function makeFullscreenButton() {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -437,18 +518,16 @@ function makeFullscreenButton() {
     btn.id = 'btn-fullscreen';
     const setIcon = () => {
         const inFs = !!document.fullscreenElement;
-        btn.title = inFs ? 'Exit fullscreen' : 'Fullscreen';
+        btn.title = inFs ? t('exitFullscreen') : t('fullscreen');
         btn.setAttribute('aria-label', btn.title);
         btn.innerHTML = inFs
-            ? // exit fullscreen icon — four arrows pointing inward
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
               + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
               + '<polyline points="9 4 9 9 4 9"/>'
               + '<polyline points="15 4 15 9 20 9"/>'
               + '<polyline points="9 20 9 15 4 15"/>'
               + '<polyline points="15 20 15 15 20 15"/></svg>'
-            : // enter fullscreen icon — four arrows pointing outward
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
               + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
               + '<polyline points="4 9 4 4 9 4"/>'
               + '<polyline points="20 9 20 4 15 4"/>'
@@ -461,18 +540,14 @@ function makeFullscreenButton() {
             if (document.fullscreenElement) await document.exitFullscreen();
             else if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
         } catch (err) {
-            showBanner('Fullscreen unavailable: ' + (err && err.message || ''), true);
+            showBanner(t('fullscreenFailed', { m: (err && err.message) || '' }), true);
         }
     });
     return btn;
 }
-// Refresh ALL fullscreen-buttons (the current topbar one + any rendered
-// in previous frames that may still be in the DOM after re-render).
 if (typeof document !== 'undefined' && !document._fsListenerBound) {
     document._fsListenerBound = true;
     document.addEventListener('fullscreenchange', () => {
-        // Replace the topbar's fullscreen button with a freshly-built one so
-        // the icon flips to match the new state.
         const old = document.getElementById('btn-fullscreen');
         if (old && old.parentNode) old.parentNode.replaceChild(makeFullscreenButton(), old);
     });
@@ -485,8 +560,8 @@ function setTopbarBack(onClick) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn icon ghost';
-    btn.setAttribute('aria-label', 'Back');
-    btn.title = 'Back';
+    btn.setAttribute('aria-label', t('back'));
+    btn.title = t('back');
     btn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" '
         + 'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
         + '<polyline points="15 18 9 12 15 6"/></svg>';
@@ -507,7 +582,7 @@ function openInfoPopup(html) {
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'popup-close';
-    close.setAttribute('aria-label', 'Close');
+    close.setAttribute('aria-label', t('cancel'));
     close.textContent = '×';
     close.addEventListener('click', () => overlay.remove());
     box.appendChild(close);
@@ -525,8 +600,8 @@ function makeInfoButton(htmlGetter) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn icon ghost info-btn';
-    btn.title = 'How to play';
-    btn.setAttribute('aria-label', 'Info');
+    btn.title = t('howToPlay');
+    btn.setAttribute('aria-label', t('info'));
     // viewBox includes stroke width so the circle is not clipped at the edges.
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" '
         + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -559,7 +634,6 @@ function infoForPlay() {
 <li>The two top edges of adjacent petals (right edge of the left petal + left edge of the right petal) are what the clue between them refers to.</li>
 <li><strong>Drag</strong> a petal onto a flower-slot to place it.</li>
 <li><strong>Click</strong> a petal to rotate it 90° clockwise — there is no separate rotate icon.</li>
-<li><strong>Right-click</strong> (desktop) or <strong>long-press</strong> (touch) a petal to lock it, so you don't move or rotate it by accident. A padlock appears in the centre. Repeat to unlock.</li>
 <li>Some petals are <strong>decoys</strong>: they don't belong in any slot. Leave them outside the flower.</li>
 </ul>
 
@@ -628,8 +702,41 @@ function renderSetup() {
     r.replaceChildren();
 
     const card = el('div', { class: 'panel' });
+    const logo = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    logo.setAttribute('class', 'hero-logo');
+    logo.setAttribute('viewBox', '-50 -50 100 100');
+    logo.setAttribute('aria-hidden', 'true');
+    const PETAL_D = 'M0,-6 C-13,-8 -15,-42 -2,-44 C2,-44 15,-42 13,-8 C13,2 0,2 0,-6 Z';
+    const PETAL_COLORS = ['#ff5b8a', '#ff8b3d', '#ffd33d', '#6fd64a', '#3dcfbf', '#4aa3ff', '#8a5cff', '#d44aff'];
+    logo.innerHTML = PETAL_COLORS.map((c, i) =>
+        `<g transform="rotate(${i * 45})"><path d="${PETAL_D}" fill="${c}" stroke="#ffffff" stroke-width="1.2" transform="rotate(180)"/></g>`
+    ).join('') +
+        '<circle cx="0" cy="0" r="10" fill="#ff8b3d"/>' +
+        '<circle cx="0" cy="0" r="6" fill="#ffd33d"/>';
+    card.appendChild(logo);
     card.appendChild(el('h1', { class: 'title' }, t('title')));
     card.appendChild(el('p', { class: 'subtitle' }, t('subtitle')));
+    // Inline UI-language picker — same flags as the settings modal.
+    const langRow = el('div', { class: 'setup-lang-row' });
+    const mkFlag = (code, label) => {
+        const active = state.uiLang === code;
+        const b = el('button', {
+            type: 'button',
+            class: 'setup-lang-btn' + (active ? ' active' : ''),
+            'aria-label': label, title: label,
+            onclick: () => {
+                if (state.uiLang === code) return;
+                state.uiLang = code;
+                saveSettings();
+                renderSetup();
+            },
+        });
+        b.innerHTML = `<span class="setup-flag" aria-hidden="true">${FLAG_SVG[code] || ''}</span>`;
+        return b;
+    };
+    langRow.appendChild(mkFlag('en', t('english')));
+    langRow.appendChild(mkFlag('de', t('german')));
+    card.appendChild(langRow);
 
     const form = el('div', { class: 'form' });
 
@@ -696,19 +803,19 @@ function renderSetup() {
     menuActions.appendChild(el('button', {
         class: 'btn', type: 'button',
         onclick: () => openImportGameModal(),
-    }, 'Import game'));
+    }, t('importGameTitle')));
     menuActions.appendChild(el('button', {
         class: 'btn', type: 'button',
         onclick: () => pickJsonFile(importGameSetJson),
-    }, 'Import game set'));
+    }, t('importGameSet')));
     menuActions.appendChild(el('button', {
         class: 'btn', type: 'button',
         onclick: () => exportGameSet(),
-    }, 'Export game set'));
+    }, t('exportGameSet')));
     menuActions.appendChild(el('button', {
         class: 'btn', type: 'button',
         onclick: () => openGameSetPicker(),
-    }, 'Play specific game'));
+    }, t('playSpecificGame')));
     card.appendChild(menuActions);
 
     const rules = el('div', { class: 'rules' });
@@ -964,29 +1071,20 @@ function renderFlowerBoard(n, opts = {}) {
 }
 
 // ----- cluegiver screen -----
-// renderCreate now PIGGYBACKS on renderPlay. The visual layout — flower in
-// the centre, draggable + rotatable cards around it — is identical; only
-// the toolbar buttons, the clue-input badges, and the initial card
-// placement (real petals pre-snapped to their slots) differ.
+// renderCreate PIGGYBACKS on renderPlay. The play screen already handles
+// every visual element we want — flower-board + drag/rotate cards with the
+// rotate-icon overlay + animated 90° spin — so we just prime state and let
+// renderPlay run with createMode branches handling the differences.
 //
-// Mechanism:
-//   • state.createMode = true tells renderPlay to take all create-screen
-//     branches (data-screen='create', skip random rotation, clueInput=true,
-//     Save/Play/Share topbar instead of Lock-in/Reveal, etc.)
-//   • state.petals is extended with 2 cluegiver-side extras (treated as
-//     state.e=2 decoys, so the existing tray-layout logic handles them)
-//   • state.placements pre-snaps real petals 0..n-1 into slots 0..n-1
-//   • state.extraPetals (the old separate tool array) is no longer used
+// state.petals layout while in create mode:
+//   [0 .. n−1]            real petals (saved with the game)
+//   [n .. n+e−1]          decoys     (saved with game; play-time misdirection)
+//   [n+e .. n+e+1]        2 cluegiver-only HELPERS (NOT saved; not in payload)
+// Helpers are visible / draggable / rotatable in create; they get sliced
+// off before Save and before the Play hand-off so they never enter the game.
 function renderCreate() {
-    // state.petals layout while in create mode:
-    //   [0 .. n−1]              real petals (saved with game)
-    //   [n .. n+e−1]            decoys     (saved with game; play-mode misdirection)
-    //   [n+e .. n+e+1]          2 cluegiver-only HELPERS (NOT saved)
-    // Helpers are visible+rotatable+swappable in create. They get sliced off
-    // before Save and before the Play hand-off so the game payload contains
-    // only the real petals + decoys.
-    const baseLen = state.n + (state.e || 0);    // game-relevant block
-    const need    = baseLen + 2;                 // + 2 helpers
+    const baseLen = state.n + (state.e || 0);
+    const need    = baseLen + 2;
     if (state.petals.length !== need) {
         let avail = [];
         try {
@@ -1000,7 +1098,7 @@ function renderCreate() {
                 [avail[i], avail[j]] = [avail[j], avail[i]];
             }
         } catch {}
-        state.petals.length = baseLen;            // drop any stale helpers
+        state.petals.length = baseLen;
         for (let i = 0; i < 2; i++) {
             const slice = avail.slice(i * 4, i * 4 + 4);
             while (slice.length < 4) slice.push('');
@@ -1008,7 +1106,8 @@ function renderCreate() {
         }
     }
     state.createMode = true;
-    // Pre-snap each real petal into its own slot.
+    // Pre-snap each real petal into its own slot. Helpers (and decoys) get
+    // tray positions computed by renderPlay's layout algorithm.
     state.placements = {};
     for (let i = 0; i < state.n; i++) state.placements[i] = i;
     state.trayPositions = {};
@@ -1021,8 +1120,8 @@ function makeShareButton({ requireCommit }) {
     const btn = el('button', {
         class: 'btn icon ghost share-btn',
         id: 'btn-share',
-        title: 'Share',
-        'aria-label': 'Share',
+        title: t('share'),
+        'aria-label': t('share'),
         onclick: () => {
             const doShare = () => {
                 // Share URL carries the mode so the recipient lands on the
@@ -1044,22 +1143,24 @@ function openShareModal(hash) {
     const existing = document.getElementById('info-popup-overlay');
     if (existing) existing.remove();
 
-    const gameId = hash.replace(/^[#&]?s=/, '');
-    const fullUrl = location.origin + location.pathname + hash;
+    const gameId  = hash.replace(/^[#&]?s=/, '').replace(/&mode=.*/, '');
+    const origin  = location.origin + location.pathname;
+    const playUrl = origin + encodeState('play');
+    const editUrl = origin + encodeState('edit');
 
     const overlay = el('div', { class: 'popup-overlay', id: 'info-popup-overlay' });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     const box = el('div', { class: 'popup-box', style: 'max-width: 560px;' });
-    const close = el('button', { class: 'popup-close', 'aria-label': 'Close',
+    const close = el('button', { class: 'popup-close', 'aria-label': t('cancel'),
         onclick: () => overlay.remove() }, '×');
     box.appendChild(close);
 
     const body = el('div', { class: 'popup-body' });
-    body.appendChild(el('h3', null, 'Share this game'));
-    body.appendChild(el('p', null,
-        'Send the URL to a friend so they can open the same flower. Or copy just the game ID and paste it into an existing Bloombine page.'));
-    body.appendChild(makeCopyField('Game URL', fullUrl));
-    body.appendChild(makeCopyField('Game ID',  gameId));
+    body.appendChild(el('h3', null, t('shareThisGame')));
+    body.appendChild(el('p', null, t('shareIntro')));
+    body.appendChild(makeCopyField(t('gameUrlPlay'), playUrl));
+    body.appendChild(makeCopyField(t('gameUrlEdit'), editUrl));
+    body.appendChild(makeCopyField(t('gameId'),     gameId));
 
     // Download the current game as a JSON file (same payload format used
     // by Import game / Import game set).
@@ -1071,7 +1172,7 @@ function openShareModal(hash) {
             const fn = 'bloombine-game-' + (payload.s || 'game') + '.json';
             downloadJson(fn, JSON.stringify(payload, null, 2));
         },
-    }, 'Download JSON'));
+    }, t('downloadJson')));
     body.appendChild(dlActions);
 
     box.appendChild(body);
@@ -1097,7 +1198,7 @@ function makeCopyField(label, value) {
         sel.addRange(r);
     });
     const btn = el('button', {
-        class: 'btn icon copy-btn', title: 'Copy', 'aria-label': 'Copy',
+        class: 'btn icon copy-btn', title: t('copy'), 'aria-label': t('copy'),
         onclick: () => {
             const ok = tryCopy(value);
             showBanner(ok ? t('copied') : t('copyFallback'));
@@ -1109,19 +1210,17 @@ function makeCopyField(label, value) {
         + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
     row.appendChild(text);
     row.appendChild(btn);
-    // Web-Share-API button — invokes the platform share sheet (mobile +
-    // some desktop browsers). Hidden when navigator.share isn't available
-    // so we don't show a dead button on plain desktop Chromium / Firefox.
+    // Native Web-Share API button — opens the platform share sheet on
+    // supported browsers (mobile + some desktop). Hidden where unsupported.
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
         const shareBtn = el('button', {
-            class: 'btn icon share-native-btn', title: 'Share', 'aria-label': 'Share',
+            class: 'btn icon share-native-btn', title: t('share'), 'aria-label': t('share'),
             onclick: async () => {
                 try {
                     await navigator.share({ title: 'Bloombine', text: label, url: value });
                 } catch (err) {
-                    // AbortError = user dismissed the sheet; stay silent.
                     if (err && err.name !== 'AbortError') {
-                        showBanner('Share failed: ' + err.message, true);
+                        showBanner(t('shareFailed', { m: err.message }), true);
                     }
                 }
             },
@@ -1140,14 +1239,21 @@ function makeCopyField(label, value) {
 }
 
 function updatePlayButtonState() {
-    const allFilled = state.clues.length > 0
+    const cluesFilled = state.clues.length > 0
         && state.clues.every(c => (c || '').trim() !== '');
-    // Save is always enabled — partial games are allowed in the set.
-    // Play / Share still need a fully-filled board.
+    // Save additionally requires every slot to hold a real petal.
+    const placements = state.placements || {};
+    let slotsFilled = true;
+    for (let k = 0; k < state.n; k++) {
+        const id = placements[k];
+        if (id == null || id < 0 || id >= state.n) { slotsFilled = false; break; }
+    }
     for (const id of ['btn-play', 'btn-share']) {
         const b = document.getElementById(id);
-        if (b) b.disabled = !allFilled;
+        if (b) b.disabled = !cluesFilled;
     }
+    const saveBtn = document.getElementById('btn-save');
+    if (saveBtn) saveBtn.disabled = !slotsFilled;
 }
 
 function commit(then) {
@@ -1205,13 +1311,13 @@ function saveGameSet(arr) {
 }
 function gamePayload() {
     // Bake each petal's cluegiver-side rotation into the words array so
-    // the saved payload reflects exactly what the cluegiver sees on
-    // screen (without needing a rotation field in the schema).
-    //   With rotation r, the rendered word at edge e is words[(e - r) % 4].
-    //   Permute so visible[e] becomes saved[e].
-    // In create mode there are 2 cluegiver-only HELPER petals appended to
-    // state.petals — slice them off so the game payload contains only the
-    // real petals (+ decoys) the player will see.
+    // the saved payload reflects what the cluegiver actually sees on
+    // screen — without needing a rotation field in the schema.
+    //   With rotation r, the rendered word at edge e is words[(e - r) % 4];
+    //   permute so visible[e] becomes saved[e].
+    // In create mode there are 2 cluegiver-only HELPERS appended past
+    // [n + e]. Slice them off so the saved payload contains only the
+    // real petals + decoys the player will see.
     const baseLen = state.n + (state.e || 0);
     const baked = state.petals.slice(0, baseLen).map((p) => {
         const r = (((p.rotation || 0) % 4) + 4) % 4;
@@ -1274,10 +1380,10 @@ function validateGamePayload(g) {
 function importSingleGameJson(text) {
     try {
         const obj = parseGameText(text);
-        if (!validateGamePayload(obj)) throw new Error('Invalid game data');
-        if (addToGameSet(obj)) showBanner('Game added to set');
-        else showBanner('Game already in set');
-    } catch (err) { showBanner('Import failed: ' + err.message, true); }
+        if (!validateGamePayload(obj)) throw new Error(t('invalidGameData'));
+        if (addToGameSet(obj)) showBanner(t('gameAddedToSet'));
+        else showBanner(t('gameAlreadyInSet'));
+    } catch (err) { showBanner(t('importFailed', { m: err.message }), true); }
 }
 // Accepts either:
 //   - already-decoded JSON ({ l, n, e, p, c, s, … }),
@@ -1285,7 +1391,7 @@ function importSingleGameJson(text) {
 //   - or just the bare base64 game-id payload from a share URL.
 function parseGameText(raw) {
     const s = String(raw || '').trim();
-    if (!s) throw new Error('Empty input');
+    if (!s) throw new Error(t('emptyInput'));
     // 1) Plain JSON?
     if (s[0] === '{' || s[0] === '[') {
         return JSON.parse(s);
@@ -1300,15 +1406,15 @@ function parseGameText(raw) {
 function importGameSetJson(text) {
     try {
         const arr = JSON.parse(text);
-        if (!Array.isArray(arr)) throw new Error('Expected an array');
+        if (!Array.isArray(arr)) throw new Error(t('expectedArray'));
         const valid = arr.filter(validateGamePayload);
         saveGameSet(valid);
-        showBanner('Game set imported (' + valid.length + ' games)');
-    } catch (err) { showBanner('Import failed: ' + err.message, true); }
+        showBanner(t('gameSetImported', { c: valid.length }));
+    } catch (err) { showBanner(t('importFailed', { m: err.message }), true); }
 }
 function exportGameSet() {
     const set = loadGameSet();
-    if (set.length === 0) { showBanner('Game set is empty'); return; }
+    if (set.length === 0) { showBanner(t('gameSetEmpty')); return; }
     const json = JSON.stringify(set, null, 2);
     downloadJson('bloombine-game-set.json', json);
 }
@@ -1323,7 +1429,7 @@ function downloadJson(filename, json) {
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (err) { showBanner('Download failed: ' + err.message, true); }
+    } catch (err) { showBanner(t('downloadFailed', { m: err.message }), true); }
 }
 function pickJsonFile(callback) {
     const input = document.createElement('input');
@@ -1379,28 +1485,28 @@ function openImportGameModal() {
     const box = el('div', { class: 'popup-box', style: 'max-width:520px;padding:1.2rem 1.4rem 1.4rem;' });
     const close = el('button', {
         type: 'button', class: 'popup-close',
-        'aria-label': 'Close',
+        'aria-label': t('cancel'),
         onclick: () => overlay.remove(),
     }, '×');
     box.appendChild(close);
     const body = el('div', { class: 'popup-body' });
-    body.appendChild(el('h3', null, 'Import game'));
+    body.appendChild(el('h3', null, t('importGameTitle')));
     body.appendChild(el('p', null, 'Paste a game id (base64), a share URL, or decoded JSON — or pick a JSON file.'));
     const ta = el('textarea', {
         class: 'import-game-textarea',
         rows: '6',
-        placeholder: 'Paste game id, share URL, or JSON…',
+        placeholder: t('importGamePh'),
     });
     body.appendChild(ta);
     const actions = el('div', { class: 'popup-actions' });
     actions.appendChild(el('button', {
         class: 'btn', type: 'button',
         onclick: () => pickJsonFile((txt) => { importSingleGameJson(txt); overlay.remove(); }),
-    }, 'Choose file'));
+    }, t('chooseFile')));
     actions.appendChild(el('button', {
         class: 'btn', type: 'button',
         onclick: () => overlay.remove(),
-    }, t('cancel') || 'Cancel'));
+    }, t('cancel')));
     actions.appendChild(el('button', {
         class: 'btn primary', type: 'button',
         onclick: () => {
@@ -1409,7 +1515,7 @@ function openImportGameModal() {
             importSingleGameJson(txt);
             overlay.remove();
         },
-    }, 'Import'));
+    }, t('importBtn')));
     body.appendChild(actions);
     box.appendChild(body);
     overlay.appendChild(box);
@@ -1426,27 +1532,27 @@ function openGameSetPicker() {
     const box = el('div', { class: 'popup-box', style: 'max-width:820px;width:95vw;padding:1.2rem 1.4rem 1.4rem;' });
     const close = el('button', {
         type: 'button', class: 'popup-close',
-        'aria-label': 'Close',
+        'aria-label': t('cancel'),
         onclick: () => overlay.remove(),
     }, '×');
     box.appendChild(close);
     const body = el('div', { class: 'popup-body' });
-    // Title row: heading + a small Reset button that wipes the entire
-    // game-set (after confirmation).
-    const resetBtn = el('button', {
-        type: 'button', class: 'btn',
-        style: 'padding:0.15rem 0.5rem;font-size:0.75rem;',
-        title: 'Clear the entire game set',
-        onclick: () => {
-            if (!confirm('Reset the game set? All saved games will be removed.')) return;
-            saveGameSet([]);
-            overlay.remove();
-            openGameSetPicker();
-        },
-    }, 'Reset');
-    const titleRow = el('div', {
-        style: 'display:flex;align-items:center;gap:0.6rem;',
-    }, el('h3', { style: 'margin:0;' }, 'Play specific game'), resetBtn);
+    const titleRow = el('div', { class: 'game-set-title-row' },
+        el('h3', { style: 'margin:0;' }, t('playSpecificGame')));
+    if (set.length > 0) {
+        const resetBtn = el('button', {
+            type: 'button', class: 'btn',
+            style: 'padding:0.2rem 0.6rem;font-size:0.8rem;',
+            title: t('resetGameSetTitle'),
+            onclick: () => {
+                if (!confirm(t('resetGameSetConfirm'))) return;
+                saveGameSet([]);
+                overlay.remove();
+                openGameSetPicker();
+            },
+        }, t('reset'));
+        titleRow.appendChild(resetBtn);
+    }
     body.appendChild(titleRow);
     if (set.length === 0) {
         body.appendChild(el('p', null, 'No games in set yet. Start a game from the main menu to add one.'));
@@ -1455,7 +1561,7 @@ function openGameSetPicker() {
         const playRandomUnplayed = () => {
             const pool = set.filter((g) => !isGameDone(g));
             if (pool.length === 0) {
-                showBanner('No unplayed games left in the set');
+                showBanner(t('noUnplayedLeft'));
                 return;
             }
             const pick = pool[Math.floor(Math.random() * pool.length)];
@@ -1465,10 +1571,17 @@ function openGameSetPicker() {
         set.forEach((g, idx) => {
             const done = isGameDone(g);
             const item = el('div', { class: 'game-set-item' + (done ? ' done' : '') });
-            const lang = (g.l || '').toString().toUpperCase() || '?';
-            const label = (idx + 1) + '. ' + lang +
-                ' - ' + (g.n || '?') + ' petals' +
-                ' - id: ' + (g.s || '?');
+            // Render the language as a flag emoji rather than its two-letter
+            // code. Falls back to the raw string for unknown languages.
+            const FLAG_BY_LANG = {
+                de: '🇩🇪', German:  '🇩🇪',
+                en: '🇺🇸', English: '🇺🇸',
+            };
+            const langKey = (g.l || '').toString();
+            const flag = FLAG_BY_LANG[langKey] || FLAG_BY_LANG[langKey.toLowerCase()] || langKey;
+            const label = (idx + 1) + '. ' + flag +
+                ' - ' + (g.n || '?') + ' ' + t('petalsWord') +
+                ' - ' + t('idWord') + ': ' + (g.s || '?');
             item.appendChild(el('span', { class: 'game-set-item-label' }, label));
             // Checkmark column — always rendered (empty when not done) so
             // the trailing buttons line up across every row.
@@ -1479,14 +1592,14 @@ function openGameSetPicker() {
             const playBtn = el('button', {
                 class: 'btn primary', type: 'button',
                 disabled: !cluesComplete,
-                title: cluesComplete ? '' : 'Game has missing clues — edit to fill them in',
+                title: cluesComplete ? '' : t('gameMissingClues'),
                 onclick: () => { overlay.remove(); playGameFromPayload(g); },
-            }, 'Play');
+            }, t('play'));
             const editBtn = el('button', {
                 class: 'btn', type: 'button',
-                title: 'Edit in create screen',
+                title: t('editInCreate'),
                 onclick: () => { overlay.remove(); editGameFromPayload(g); },
-            }, 'Edit');
+            }, t('edit'));
             const delBtn = el('button', {
                 class: 'btn danger', type: 'button',
                 onclick: () => {
@@ -1496,7 +1609,7 @@ function openGameSetPicker() {
                     overlay.remove();
                     openGameSetPicker();
                 },
-            }, 'Delete');
+            }, t('delete'));
             const actions = el('div', { class: 'game-set-row-actions' },
                 playBtn, editBtn, delBtn);
             item.appendChild(actions);
@@ -1510,7 +1623,7 @@ function openGameSetPicker() {
         const randBtn = el('button', {
             class: 'btn primary', type: 'button',
             onclick: playRandomUnplayed,
-        }, 'Play random unplayed game');
+        }, t('playRandomUnplayed'));
         if (!hasUnplayed) randBtn.disabled = true;
         actions.appendChild(randBtn);
         body.appendChild(actions);
@@ -1529,8 +1642,7 @@ const TRAY_GAP = 14;
 function renderPlay() {
     const createMode = state.createMode === true;
     document.body.dataset.screen = createMode ? 'create' : 'play';
-    // Back: in play, confirm before leaving a game in progress; in create
-    // just navigate setup directly (clue authoring isn't a "game in progress").
+    // Back: confirm in play, skip the confirm in create (no game in progress).
     if (createMode) {
         setTopbarBack(() => {
             state.createMode = false;
@@ -1551,16 +1663,16 @@ function renderPlay() {
     }
     const r = root();
     r.replaceChildren();
-    // PLAY: reset placements + tray (restoreGameState may overlay later).
-    // CREATE: keep the pre-populated state.placements (real petals → slots).
+    // Create keeps the pre-populated placements (real petals → slots);
+    // play wipes them so the shuffled-tray flow can start fresh.
     if (!createMode) {
         state.placements = {};
         state.trayPositions = {};
     }
     state.tries = state.tries || 0;
 
-    // PLAY: randomise per-petal rotation + tray order from the seed.
-    // CREATE: rotations stay 0, palette is identity (no shuffle).
+    // Per-petal starting rotation + tray order. In play it's seeded random;
+    // in create everything starts at rotation 0 in identity order.
     const total = state.petals.length;
     const seed = state.shuffleSeed || 1;
     state.petalRot = {};
@@ -1569,8 +1681,8 @@ function renderPlay() {
             state.petals[i].rotation = state.petals[i].rotation || 0;
             state.petalRot[i] = state.petals[i].rotation;
         }
-        // Cluegiver sees: real petals (0..n-1) + helpers (n+e..end).
-        // Decoys (n..n+e-1) are hidden — they're play-time misdirection only.
+        // Cluegiver sees N real petals + 2 helpers (NOT the e decoys —
+        // those are play-time misdirection only). N + 2 cards on screen.
         const baseLen = state.n + (state.e || 0);
         state.palette = state.petals
             .filter((_, i) => i < state.n || i >= baseLen)
@@ -1585,28 +1697,25 @@ function renderPlay() {
     }
 
     if (createMode) {
-        const infoBtn = makeInfoButton(infoForCreate);
+        const infoBtn  = makeInfoButton(infoForCreate);
         const shareBtn = makeShareButton({ requireCommit: true });
-        const saveBtn = el('button', {
-            class: 'btn primary',
-            id: 'btn-save',
-            title: 'Save to game set',
+        const saveBtn  = el('button', {
+            class: 'btn primary', id: 'btn-save',
+            title: t('gameSavedToSetTip'),
             style: 'background:#1e4d29;border-color:#133018;color:#fff;',
             onclick: () => {
                 state.clues = state.clues.map((c) => (c || '').trim());
                 const added = addToGameSet(gamePayload());
-                showBanner(added ? 'Game saved to set' : 'Game already in set');
+                showBanner(added ? t('gameSavedToSet') : t('gameAlreadyInSet'));
                 navigate('setup');
             },
-        }, 'Save');
+        }, t('save'));
         const playBtn = el('button', {
-            class: 'btn primary',
-            id: 'btn-play',
+            class: 'btn primary', id: 'btn-play',
             style: 'background:#1e4d29;border-color:#133018;color:#fff;',
             onclick: () => commit(() => {
                 state.createMode = false;
-                // Trim cluegiver-only helpers from state.petals so the
-                // play screen sees only real petals + decoys.
+                // Drop cluegiver-only helpers before handing off to play.
                 state.petals.length = state.n + (state.e || 0);
                 state.placements = {};
                 state.trayPositions = {};
@@ -1633,17 +1742,17 @@ function renderPlay() {
     }
 
     // Toolbar pinned below the topbar. In play: round counter + zoom.
-    // In create: a "Simple dialog" button (focused single-boundary editor)
-    // + zoom — both use the same horizontal-bar layout.
+    // In create: a "Simple dialog" button (focused single-boundary clue
+    // editor) + zoom — same horizontal-bar layout.
     const tryEl = createMode
         ? el('button', {
             class: 'btn simple-dialog-btn', type: 'button',
             onclick: () => openSimpleDialog(0),
-        }, 'Simple dialog')
+        }, t('simpleDialog'))
         : el('div', { class: 'try-counter', id: 'try-counter' },
             t('tries', { c: (state.tries || 0) + 1 }));
     const zoomOutBtn = el('button', {
-        class: 'btn icon zoom-btn', id: 'btn-zoom-out', title: 'Zoom out',
+        class: 'btn icon zoom-btn', id: 'btn-zoom-out', title: t('zoomOut'),
         onclick: () => stepZoom(-1),
     });
     zoomOutBtn.innerHTML = ''
@@ -1653,7 +1762,7 @@ function renderPlay() {
         + '<line x1="20.5" y1="20.5" x2="16" y2="16"/>'
         + '<line x1="7.5" y1="11" x2="14.5" y2="11"/></svg>';
     const zoomInBtn = el('button', {
-        class: 'btn icon zoom-btn', id: 'btn-zoom-in', title: 'Zoom in',
+        class: 'btn icon zoom-btn', id: 'btn-zoom-in', title: t('zoomIn'),
         onclick: () => stepZoom(+1),
     });
     zoomInBtn.innerHTML = ''
@@ -1683,8 +1792,12 @@ function renderPlay() {
     const BADGE_HALF_W = 88, BADGE_HALF_H = 22;
     const sd = window.slotDiagonal(state.n) / G.VB;
     const appRect = r.getBoundingClientRect();
-    const usableW = Math.max(240, appRect.width);
-    const usableH = Math.max(240, appRect.height);
+    // Floor the bounding-rect dimensions: getBoundingClientRect can return
+    // fractional pixels; assigning that fraction back to play-area's inline
+    // width/height makes the play-area a hair larger than #app-root's
+    // integer client size and triggers spurious scrollbars.
+    const usableW = Math.max(240, Math.floor(appRect.width));
+    const usableH = Math.max(240, Math.floor(appRect.height));
     // In PORTRAIT (height > width) the user wants the flower-stage itself
     // to fill the full screen width at 100 % zoom — clue-badges may
     // overflow horizontally beyond the visible viewport. In landscape we
@@ -1703,8 +1816,8 @@ function renderPlay() {
 
     // Build the board first so we know its exact (boardW × boardH) — those
     // become the play-area's dimensions (play-area = flower-board).
-    //   clueInput: true in create (cluegiver-side per-boundary inputs);
-    //   clueInput: false in play  (badges show the locked-in clue text).
+    //   In create the badges become text inputs so the cluegiver can type
+    //   one clue per boundary; play just shows the locked-in clue text.
     const board = renderFlowerBoard(state.n, {
         clueInput: createMode,
         onSlotDrop: (slotIdx, petalId) => placePetal(petalId, slotIdx),
@@ -1800,8 +1913,8 @@ function renderPlay() {
     }
     // Already-saved card positions count as obstacles too — never overlay
     // a card whose position is fixed by state.trayPositions.
-    // Cards already PLACED in slots (state.placements) don't need tray
-    // positions at all — they'll be moved into their slot after the loop.
+    // Cards already placed in slots (state.placements) don't need tray
+    // positions — they get appended straight into their slot drop-zone.
     const placedIds = new Set(Object.values(state.placements || {}));
     const needPositions = [];      // [{ idx, id }] for cards without a saved pos
     state.palette.forEach((id, idx) => {
@@ -1892,8 +2005,7 @@ function renderPlay() {
         card.style.width  = state.cardSize + 'px';
         card.style.height = state.cardSize + 'px';
         if (placedIds.has(id)) {
-            // Already-placed (create mode): drop straight into the slot.
-            // Find the slotIdx for this petal id.
+            // Pre-placed (create mode): append straight into the matching slot.
             let slotIdx = null;
             for (const k in state.placements) {
                 if (state.placements[k] === id) { slotIdx = parseInt(k, 10); break; }
@@ -1903,7 +2015,6 @@ function renderPlay() {
                 `.flower-slot[data-slot="${slotIdx}"] .slot-drop`);
             if (slotDrop) {
                 slotDrop.appendChild(card);
-                // Clear any inline left/top — the slot positions the card.
                 card.style.left = '';
                 card.style.top  = '';
             }
@@ -1937,11 +2048,8 @@ function renderPlay() {
         }
     });
 
-    if (createMode) {
-        updatePlayButtonState();   // gates Save/Play/Share on full clues
-    } else {
-        updateLockInButtonState();
-    }
+    if (createMode) updatePlayButtonState();
+    else            updateLockInButtonState();
 }
 
 // Global Ctrl+wheel zoom + 2-finger pinch zoom. Bound once on document
@@ -2071,9 +2179,13 @@ function updateTryCounter() {
 // Lock-in is only enabled once every flower slot has a petal-card in it.
 function updateLockInButtonState() {
     const btn = document.getElementById('btn-lockin');
-    if (!btn) return;
-    const filled = Object.keys(state.placements || {}).length === state.n;
-    btn.disabled = !filled;
+    if (btn) {
+        const filled = Object.keys(state.placements || {}).length === state.n;
+        btn.disabled = !filled;
+    }
+    // Create-mode reuses the same drag/place callsites — keep Save's
+    // disabled state in sync with the current slot fill.
+    if (state.createMode) updatePlayButtonState();
 }
 
 // "Lock in" — remove every placed petal that isn't correct (wrong slot OR
@@ -2109,7 +2221,7 @@ function showAllCorrectModal() {
     const box = el('div', { class: 'popup-box all-correct-box' });
     const close = el('button', {
         type: 'button', class: 'popup-close',
-        'aria-label': 'Close',
+        'aria-label': t('cancel'),
         onclick: () => overlay.remove(),
     }, '×');
     box.appendChild(close);
@@ -2127,11 +2239,28 @@ function showAllCorrectModal() {
         t('score', { c: state.n, t: state.n }) + ' · ' +
         t('tries', { c: state.tries || 1 })));
     const actions = el('div', { class: 'popup-actions' });
+    actions.style.flexDirection = 'column';
     const ok = el('button', {
         class: 'btn primary big', type: 'button',
         onclick: () => overlay.remove(),
-    }, 'OK');
+    }, t('backToGame'));
+    const exitBtn = el('button', {
+        class: 'btn big', type: 'button',
+        onclick: () => {
+            overlay.remove();
+            state.placements = {};
+            state.trayPositions = {};
+            state.tries = 0;
+            try { localStorage.removeItem(GAME_STATE_KEY); } catch {}
+            if (location.hash) {
+                history.replaceState({ screen: 'setup' }, '',
+                    location.pathname + location.search);
+            }
+            navigate('setup');
+        },
+    }, t('exit'));
     actions.appendChild(ok);
+    actions.appendChild(exitBtn);
     body.appendChild(actions);
     box.appendChild(body);
     overlay.appendChild(box);
@@ -2147,18 +2276,14 @@ function doReveal() {
         state.petalRot[i] = 0;
         const card = document.querySelector(`.petal-card[data-petal-id="${i}"]`);
         if (card) window.refreshPetalCard(card, state.petals[i]);
-        // Pass slotAngleDeg as currentAngleDeg AND noShift=true so
-        // placePetal's word-screen-stability rotation compensation is
-        // skipped — Reveal wants rotation 0 to stick, not be re-cycled.
-        const slotAngleDeg = (i / state.n) * 360;
-        placePetal(i, i, slotAngleDeg, true);
+        placePetal(i, i);
     }
     markGameDone(gamePayload());
     saveGameState();
 
     const btn = document.getElementById('btn-reveal');
     if (btn) {
-        btn.textContent = t('exit') || 'Exit';
+        btn.textContent = t('exit');
         btn.disabled = false;
         btn.onclick = () => {
             state.placements = {};
@@ -2188,7 +2313,7 @@ function confirmExit(onConfirm) {
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'popup-close';
-    close.setAttribute('aria-label', 'Close');
+    close.setAttribute('aria-label', t('cancel'));
     close.textContent = '×';
     close.addEventListener('click', () => overlay.remove());
     box.appendChild(close);
@@ -2238,7 +2363,7 @@ function openSimpleDialog(startBoundary) {
     const box = el('div', { class: 'popup-box simple-dialog-box' });
     const close = el('button', {
         type: 'button', class: 'popup-close',
-        'aria-label': 'Close',
+        'aria-label': t('cancel'),
         onclick: () => overlay.remove(),
     }, '×');
     box.appendChild(close);
@@ -2299,14 +2424,22 @@ function openSimpleDialog(startBoundary) {
         // modal width. Wrapped together so they animate / move as a unit
         // and inherit the top-locked flex-shrink rule.
         const inputRow = el('div', { class: 'simple-input-row' });
-        const labelText = (t('boundary') || 'Boundary') + ' ' + (cur + 1) + ' / ' + state.n;
+        const labelText = t('boundary') + ' ' + (cur + 1) + ' / ' + state.n;
         const label = el('div', { class: 'simple-boundary-label' }, labelText);
         const clueInput = el('input', {
             type: 'text', class: 'clue-text-input simple-clue-input',
-            placeholder: t('cluePh') || 'Clue',
+            placeholder: t('cluePh'),
             value: buffer[cur] || '',
         });
-        clueInput.addEventListener('input', () => { buffer[cur] = clueInput.value; });
+        clueInput.addEventListener('input', () => {
+            buffer[cur] = clueInput.value;
+            // Live-refresh the Play button's disabled state: Play needs
+            // every clue in the buffer to be non-empty.
+            const playBtn = box.querySelector('.simple-dialog-actions .btn.primary:last-child');
+            if (playBtn) {
+                playBtn.disabled = !buffer.every((c) => (c || '').trim() !== '');
+            }
+        });
         // Enter → advance to the next boundary (matches the › button).
         // After render() the input is recreated, so re-query and focus it
         // so typing flow continues uninterrupted.
@@ -2341,14 +2474,14 @@ function openSimpleDialog(startBoundary) {
         };
         const pairPrev = el('button', {
             class: 'btn simple-pair-nav', type: 'button',
-            'aria-label': 'Previous boundary',
+            'aria-label': t('previousBoundary'),
             disabled: cur === 0,
             onclick: () => { if (cur > 0) { cur--; render(); } },
         });
         pairPrev.innerHTML = chevronSvg('left');
         const pairNext = el('button', {
             class: 'btn simple-pair-nav', type: 'button',
-            'aria-label': 'Next boundary',
+            'aria-label': t('nextBoundary'),
             disabled: cur >= state.n - 1,
             onclick: () => { if (cur < state.n - 1) { cur++; render(); } },
         });
@@ -2369,7 +2502,7 @@ function openSimpleDialog(startBoundary) {
         requestAnimationFrame(() => window.fitAllPetalWords(pair));
 
         // "Other cards" title stays PINNED above the scrollable grid.
-        body.appendChild(el('h3', { class: 'simple-others-title' }, 'Other cards'));
+        body.appendChild(el('h3', { class: 'simple-others-title' }, t('otherCards')));
         const scrollWrap = el('div', { class: 'simple-others-wrap' });
         const others = el('div', { class: 'simple-others' });
         for (let k = 0; k < state.n; k++) {
@@ -2384,26 +2517,53 @@ function openSimpleDialog(startBoundary) {
         body.appendChild(scrollWrap);
         requestAnimationFrame(() => window.fitAllPetalWords(others));
 
-        // Actions: Cancel · Apply · Play.
+        // Actions: Cancel · Apply · Save · Play.
+        // Save / Play follow the same disabled rules as the create-screen
+        // topbar buttons:
+        //   Save: every slot holds a real petal (id < state.n).
+        //   Play: every clue (in the current edit buffer) is non-empty.
+        const cluesAllFilled = buffer.every((c) => (c || '').trim() !== '');
+        const placements = state.placements || {};
+        let slotsAllFilled = true;
+        for (let k = 0; k < state.n; k++) {
+            const id = placements[k];
+            if (id == null || id < 0 || id >= state.n) { slotsAllFilled = false; break; }
+        }
         const actions = el('div', { class: 'popup-actions simple-dialog-actions' });
         const cancelBtn = el('button', {
             class: 'btn', type: 'button',
             onclick: () => overlay.remove(),
-        }, t('cancel') || 'Cancel');
+        }, t('cancel'));
         const applyBtn = el('button', {
             class: 'btn primary', type: 'button',
             onclick: () => { applyBuffer(); overlay.remove(); },
-        }, 'Apply');
+        }, t('apply'));
+        const saveBtnEl = el('button', {
+            class: 'btn primary', type: 'button',
+            disabled: !slotsAllFilled,
+            title: t('gameSavedToSetTip'),
+            style: 'background:#1e4d29;border-color:#133018;color:#fff;',
+            onclick: () => {
+                applyBuffer();
+                state.clues = state.clues.map((c) => (c || '').trim());
+                const added = addToGameSet(gamePayload());
+                showBanner(added ? t('gameSavedToSet') : t('gameAlreadyInSet'));
+                overlay.remove();
+                navigate('setup');
+            },
+        }, t('save'));
         const playBtnEl = el('button', {
             class: 'btn primary', type: 'button',
+            disabled: !cluesAllFilled,
             onclick: () => {
                 applyBuffer();
                 overlay.remove();
                 commit(() => navigate('play'));
             },
-        }, t('play') || 'Play');
+        }, t('play'));
         actions.appendChild(cancelBtn);
         actions.appendChild(applyBtn);
+        actions.appendChild(saveBtnEl);
         actions.appendChild(playBtnEl);
         body.appendChild(actions);
     }
@@ -2415,12 +2575,10 @@ function openSimpleDialog(startBoundary) {
 
 function makePlayPetal(id) {
     const petal = state.petals[id];
-    state.locked = state.locked || {};
     const card = window.renderPetalCard(petal, {
         interactive: true,
         levelN: state.n,
         onRotate: (p) => {
-            if (state.locked[p.id]) return;
             p.rotation = (p.rotation + 1) % 4;
             state.petalRot[p.id] = p.rotation;
             const node = document.querySelector(`.petal-card[data-petal-id="${p.id}"]`);
@@ -2450,7 +2608,6 @@ function makePlayPetal(id) {
     let rotateAnim = false;
     card.addEventListener('click', (e) => {
         if (suppressClick) { e.stopImmediatePropagation(); suppressClick = false; return; }
-        if (state.locked[id]) return;
         if (rotateAnim) return;
         rotateAnim = true;
 
@@ -2522,7 +2679,7 @@ function makePlayPetal(id) {
     const DRAG_THRESHOLD = 5;     // mouse: pointer movement before drag starts
 
     let longPressTimer = null;
-    // mode: 'idle' | 'pending' | 'panning' | 'lock-armed' | 'dragging'
+    // mode: 'idle' | 'pending' | 'panning' | 'dragging'
     //   panning = touch started on card but user is finger-scrolling the
     //   play-area (we forward the deltas to #app-root.scrollLeft/Top).
     let mode = 'idle';
@@ -2638,13 +2795,6 @@ function makePlayPetal(id) {
     }
 
     card.addEventListener('pointerdown', (e) => {
-        if (e.button === 2) {
-            // Desktop right-click → toggle lock.
-            e.preventDefault();
-            suppressClick = true;
-            toggleLock(id);
-            return;
-        }
         if (e.button !== 0) return;
         e.preventDefault();
         try { card.setPointerCapture(e.pointerId); } catch {}
@@ -2654,24 +2804,18 @@ function makePlayPetal(id) {
         mode = 'pending';
         suppressClick = false;
 
-        // Touch: arm a long-press to enter drag mode (or to unlock a locked
-        // card — touch devices have no right-click).
+        // Touch: arm a long-press that escalates straight to a drag.
         if (e.pointerType === 'touch') {
-            // Remember the scroll origin so an early finger-move can be
-            // forwarded to #app-root as a manual scroll (the user just wanted
-            // to scroll the play-area but happened to start on a card).
             const sc = document.getElementById('app-root');
             panStartScrollLeft = sc ? sc.scrollLeft : 0;
             panStartScrollTop  = sc ? sc.scrollTop  : 0;
             longPressTimer = setTimeout(() => {
                 if (mode !== 'pending') return;
-                mode = 'lock-armed';
+                mode = 'dragging';
                 suppressClick = true;
                 if (navigator.vibrate) navigator.vibrate(15);
                 card.classList.add('picked-up');
-                // Locked cards: don't lift, since dragging is disabled. The
-                // release will simply toggle (unlock) the card.
-                if (!state.locked[id]) liftCard();
+                liftCard();
             }, LONG_PRESS_MS);
         }
     });
@@ -2689,9 +2833,6 @@ function makePlayPetal(id) {
             // SCROLL the play-area, not pick up a card — promote to 'panning'
             // and forward the deltas to #app-root.scroll*.
             if (e.pointerType !== 'touch' && moved >= DRAG_THRESHOLD) {
-                // Locked cards must NOT drag — bail before lifting so we
-                // don't re-parent to body and then no-op every frame after.
-                if (state.locked[id]) { suppressClick = true; return; }
                 mode = 'dragging';
                 suppressClick = true;
                 card.classList.add('picked-up');
@@ -2703,12 +2844,6 @@ function makePlayPetal(id) {
             } else {
                 return;
             }
-        } else if (mode === 'lock-armed') {
-            if (moved < DRAG_THRESHOLD) return;
-            // Same guard for touch — lock-armed shouldn't escalate to a
-            // drag if the card is locked (release will just unlock).
-            if (state.locked[id]) return;
-            mode = 'dragging';
         }
 
         if (mode === 'panning') {
@@ -2721,8 +2856,6 @@ function makePlayPetal(id) {
             return;
         }
 
-        if (state.locked[id]) return;                // locked cards never drag
-
         if (mode === 'dragging') {
             // Move card so its CENTRE = cursor − (screen offset captured at lift).
             // Lifted card uses transform: scale() (not CSS zoom), so its
@@ -2733,9 +2866,7 @@ function makePlayPetal(id) {
             const newCy = e.clientY - dragOffsetY;
             card.style.left = (newCx - half) + 'px';
             card.style.top  = (newCy - half) + 'px';
-            // Auto-scroll #app-root when the cursor is near a viewport edge.
-            // Lifted card is position:fixed, so it stays glued to the cursor
-            // while the world scrolls under it.
+            // Auto-scroll #app-root when the cursor nears a viewport edge.
             updateEdgeScroll(e.clientX, e.clientY);
         }
     });
@@ -2755,28 +2886,6 @@ function makePlayPetal(id) {
             return;
         }
         card.classList.remove('picked-up');
-        if (prevMode === 'lock-armed') {
-            // Locked-card branch: liftCard wasn't called, so no inline-style
-            // restoration or re-parenting is needed — just toggle the lock.
-            if (state.locked[id]) {
-                if (!cancelled) toggleLock(id);
-                return;
-            }
-            // Unlocked-card lock-arm: card was lifted to <body>. Put it back
-            // (slot or play-area) and restore its inline styles, then lock it.
-            restoreInline();
-            const slotIdx = lookupSlot(id);
-            if (slotIdx != null) {
-                const slotDrop = document.querySelector(
-                    `.flower-slot[data-slot="${slotIdx}"] .slot-drop`);
-                if (slotDrop) slotDrop.appendChild(card);
-            } else {
-                const playArea = document.getElementById('play-area');
-                if (playArea) playArea.appendChild(card);
-            }
-            if (!cancelled) toggleLock(id);
-            return;
-        }
         if (prevMode === 'dragging') {
             restoreInline();
             if (cancelled || !e) return;
@@ -2838,40 +2947,7 @@ function makePlayPetal(id) {
     rotIcon.style.transform = `translate(-50%, -50%) rotate(${(petal.rotation || 0) * 90}deg)`;
     card.appendChild(rotIcon);
 
-    if (state.locked[id]) applyLockVisual(card, true);
     return card;
-}
-
-function toggleLock(id) {
-    state.locked = state.locked || {};
-    const currentlyLocked = !!state.locked[id];
-    // Only petals placed in a flower-slot can be locked. Unlocking is always
-    // allowed (in case the card somehow left its slot while still flagged).
-    if (!currentlyLocked && lookupSlot(id) == null) return;
-    state.locked[id] = !currentlyLocked;
-    const card = document.querySelector(`.petal-card[data-petal-id="${id}"]`);
-    if (card) applyLockVisual(card, !!state.locked[id]);
-    saveGameState();
-}
-
-function applyLockVisual(card, locked) {
-    card.classList.toggle('locked', locked);
-    card.setAttribute('draggable', locked ? 'false' : 'true');
-    let overlay = card.querySelector('.petal-lock');
-    if (locked) {
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.className = 'petal-lock';
-            overlay.setAttribute('aria-label', 'Locked');
-            overlay.innerHTML = '<svg viewBox="0 0 24 24" fill="none" '
-                + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-                + '<rect x="4.5" y="11" width="15" height="10" rx="2"/>'
-                + '<path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
-            card.appendChild(overlay);
-        }
-    } else if (overlay) {
-        overlay.remove();
-    }
 }
 
 function placePetal(petalId, slotIdx, currentAngleDeg, noShift) {

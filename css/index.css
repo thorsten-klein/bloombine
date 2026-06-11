@@ -126,31 +126,40 @@ body {
     width: 1rem;
     height: 1rem;
 }
-/* Info & Share icons in the topbar — frame-less, icon nearly fills the button. */
+/* Topbar icon buttons — frame-less, icon nearly fills the button. Applies
+   to Info, Share, Settings, and Fullscreen toggles so they all read with
+   the same white-on-gradient look. */
 .btn.icon.info-btn,
-.btn.icon.share-btn {
+.btn.icon.share-btn,
+.btn.icon.settings-btn,
+.btn.icon.fullscreen-btn {
     background: transparent;
     border: none;
     padding: 2px;
     color: #fff;
+    opacity: 1;
 }
 @media (hover: hover) {
     .btn.icon.info-btn:hover,
-    .btn.icon.share-btn:hover {
+    .btn.icon.share-btn:hover,
+    .btn.icon.settings-btn:hover,
+    .btn.icon.fullscreen-btn:hover {
         background: rgba(255,255,255,0.18);
     }
 }
 .btn.icon.info-btn:disabled,
-.btn.icon.share-btn:disabled {
+.btn.icon.share-btn:disabled,
+.btn.icon.settings-btn:disabled,
+.btn.icon.fullscreen-btn:disabled {
     opacity: 0.5;
 }
-.btn.icon.share-btn svg {
+.btn.icon.share-btn svg,
+.btn.icon.info-btn svg,
+.btn.icon.settings-btn svg,
+.btn.icon.fullscreen-btn svg {
     width: 100%;
     height: 100%;
-}
-.btn.icon.info-btn svg {
-    width: 100%;
-    height: 100%;
+    stroke: #fff;
 }
 
 /* ---- main / panels ---- */
@@ -217,6 +226,27 @@ body {
 }
 .panel .btn.primary:hover:not(:disabled) {
     background: #2a6b3a;
+}
+
+.hero-logo {
+    display: block;
+    width: 96px;
+    height: 96px;
+    margin: 0 auto;
+    transform-origin: 50% 50%;
+    animation: hero-logo-spin 6s linear infinite,
+               hero-logo-pulse 2.4s ease-in-out infinite;
+    filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
+}
+@keyframes hero-logo-spin {
+    to { transform: rotate(360deg); }
+}
+@keyframes hero-logo-pulse {
+    0%, 100% { scale: 1; }
+    50%      { scale: 1.18; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .hero-logo { animation: none; }
 }
 
 .title {
@@ -411,9 +441,7 @@ body[data-screen="create"] .flower-board {
     pointer-events: none;
 }
 
-/* ---- create-screen extras tray ---- */
-/* Two cluegiver-side spare petals sit below the flower. Click rotates;
-   the Swap button arms a swap with the next-clicked slot card. */
+/* ---- create-screen helper-cards tray ---- */
 .create-extras-tray {
     display: flex;
     justify-content: center;
@@ -430,10 +458,8 @@ body[data-screen="create"] .flower-board {
 .create-extra-card,
 .create-slot-card { cursor: pointer; }
 .create-extra-card {
-    /* Fixed display size since the card isn't inside a slot (no inherited
-       width/height). Diamond shape extends visually past the box. */
-    width: 160px;
-    height: 160px;
+    width: 150px;
+    height: 150px;
     position: relative;
 }
 .create-swap-btn {
@@ -626,37 +652,6 @@ body[data-screen="create"] .flower-board {
     justify-content: center;
 }
 .petal-rotate-icon svg { width: 100%; height: 100%; }
-.petal-card.locked .petal-rotate-icon { display: none; }
-
-/* Lock overlay shown on a locked petal-card. Counter-rotates against the
-   slot's --slot-angle so the lock always reads upright regardless of where
-   the card is in the ring. */
-.petal-lock {
-    position: absolute;
-    left: 50%; top: 50%;
-    transform: translate(-50%, -50%) rotate(calc(-1 * var(--slot-angle, 0deg)));
-    width: 32%;
-    aspect-ratio: 1 / 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.55);
-    border-radius: 50%;
-    pointer-events: none;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-    z-index: 5;
-}
-.petal-lock svg {
-    width: 70%;
-    height: 70%;
-}
-.petal-card.locked .diamond-body {
-    filter: saturate(0.7);
-}
-.petal-card.locked {
-    cursor: not-allowed;
-}
 
 /* ============================================================
    Clue badge — anchored at petal-tip
@@ -825,7 +820,11 @@ body[data-screen="play"] #app-root {
 body[data-screen="create"] #app-root {
     max-width: none;
     width: 100vw;
-    padding-bottom: 0;
+    /* Zero padding so the inline-sized play-area (= appRect.width × .height)
+       fits exactly inside #app-root with no spurious scroll. The default
+       `#app-root` padding pushed the play-area past its container, causing
+       both horizontal and vertical scrollbars even when all cards fit. */
+    padding: 0;
     gap: 0;
 }
 body[data-screen="create"] .flower-board {
@@ -841,7 +840,7 @@ body[data-screen="create"] .flower-board {
     zoom: var(--play-zoom, 1);
     position: relative;
     flex-shrink: 0;
-    margin: 0 auto;
+    margin: 20px auto 0;
     touch-action: pan-x pan-y;
 }
 /* In the play screen the petal-words were rendering bigger than necessary
@@ -1159,14 +1158,28 @@ body[data-screen="play"] .flower-slot { overflow: visible; }
 }
 
 .simple-dialog-btn {
-    /* Centred toolbar button. */
+    /* Pinned to the bottom-centre of the viewport — unaffected by play-area
+       scroll or CSS zoom. Sits above the page on its own layer so the
+       cluegiver can always reach it. */
+    position: fixed;
+    left: 50%;
+    bottom: 1rem;
+    transform: translateX(-50%);
+    z-index: 1500;
     font-weight: 700;
-    padding: 0.35rem 0.9rem;
-    background: rgba(255, 255, 255, 0.9);
+    padding: 0.45rem 1.1rem;
+    background: rgba(255, 255, 255, 0.95);
     color: #1e4d29;
-    border: 1px solid rgba(30, 77, 41, 0.35);
+    border: 1px solid rgba(30, 77, 41, 0.45);
     border-radius: 999px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--shadow-md);
+    pointer-events: auto;
+}
+/* Preserve the translateX(-50%) centering on :active — without this the
+   generic .btn:active rule overrides transform and the button jumps right
+   by half its width on tap. */
+.simple-dialog-btn:active:not(:disabled) {
+    transform: translateX(-50%) translateY(1px);
 }
 
 /* The info modal restores the popup-box's vertical padding that the
@@ -1228,6 +1241,11 @@ body[data-screen="play"] .flower-slot { overflow: visible; }
 }
 
 /* Play-specific-game picker list */
+.game-set-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
 .game-set-list {
     display: flex;
     flex-direction: column;
@@ -1393,13 +1411,73 @@ body[data-screen="play"] .flower-slot { overflow: visible; }
     border: 1px solid #133018;
 }
 .btn.share-native-btn {
-    background: #60a5fa;          /* light blue */
+    background: #60a5fa;
     border: 1px solid #3b82f6;
 }
-.btn.copy-btn:hover:not(:disabled) { background: #2a6b3a; }
+.btn.copy-btn:hover:not(:disabled)         { background: #2a6b3a; }
 .btn.share-native-btn:hover:not(:disabled) { background: #3b82f6; }
 .btn.copy-btn svg,
 .btn.share-native-btn svg { width: 1.1rem; height: 1.1rem; }
+
+/* ============================================================
+   Settings modal — language picker (US/DE flags)
+   ============================================================ */
+.settings-lang-row {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+.settings-lang-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.8rem 1.2rem;
+    min-width: 7rem;
+    background: rgba(255, 255, 255, 0.9);
+    color: #1e4d29;
+    border: 2px solid rgba(30, 77, 41, 0.35);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.settings-lang-btn.active {
+    background: #2ecc71;
+    border-color: #1e8449;
+    box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.4);
+}
+.settings-flag {
+    display: inline-block;
+    width: 3.5rem;
+    line-height: 0;
+}
+.settings-flag svg { width: 100%; height: auto; display: block; }
+
+/* Inline flag picker below the setup-screen subtitle. */
+.setup-lang-row {
+    display: flex;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-top: -0.2rem;
+}
+.setup-lang-btn {
+    background: rgba(255, 255, 255, 0.18);
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-radius: 6px;
+    padding: 0.15rem 0.35rem;
+    cursor: pointer;
+    line-height: 0;
+}
+.setup-lang-btn.active {
+    background: #fff;
+    border-color: #fff;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.45);
+}
+.setup-flag {
+    display: inline-block;
+    width: 2rem;
+    line-height: 0;
+}
+.setup-flag svg { width: 100%; height: auto; display: block; }
 
 /* ============================================================
    Banner
