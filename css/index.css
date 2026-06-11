@@ -72,11 +72,17 @@ body {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    /* Allow the action group (#topbar-right) to drop to its own row when
+       it can't fit alongside the title. column-gap controls the gap on a
+       single row; row-gap is the vertical breathing room between rows. */
+    flex-wrap: wrap;
+    column-gap: 0.5rem;
+    row-gap: 0.15rem;
     padding: 0.2rem 0.8rem;
-    /* Fixed height keeps the bar identical on all screens, whether the
-       right-side action area is empty (setup) or holds buttons (create). */
-    height: 2.2rem;
+    /* min-height instead of fixed height — the bar must be able to grow
+       vertically when its second row appears. The play-toolbar below
+       tracks the bar's measured height via --topbar-h (set in JS) so it
+       stays flush regardless of whether the bar is one or two rows. */
     min-height: 2.2rem;
     color: #fff;
     background: var(--topbar-grad);
@@ -92,9 +98,9 @@ body {
     background: linear-gradient(180deg, rgba(255,255,255,0.16), transparent 65%);
     mix-blend-mode: overlay;
 }
-#topbar-back { display: flex; align-items: center; }
+#topbar-back { display: flex; align-items: center; flex-shrink: 0; }
 #topbar-back:empty { display: none; }
-#topbar-left { display: flex; align-items: center; gap: 0.5rem; }
+#topbar-left { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
 .topbar-logo { width: 18px; height: 18px; }
 #topbar-title {
     font-family: var(--font-display);
@@ -108,6 +114,14 @@ body {
     display: flex;
     align-items: center;
     gap: 0.35rem;
+    /* Two-step wrap behaviour:
+       - flex-shrink: 0 so the WHOLE button group moves as one unit
+         (individual buttons never get squeezed off-line).
+       - margin-left: auto right-aligns it whether it shares the row with
+         the title (then it's pushed against the right edge) or wraps to
+         its own row (then auto fills the leading space and it still hugs
+         the right edge). */
+    flex-shrink: 0;
 }
 /* Padding only applies to non-icon buttons (text buttons like Play). Icon
    buttons keep padding:0 from .btn.icon — the #topbar-right ID selector here
@@ -428,11 +442,6 @@ body {
     flex-shrink: 0;
     overflow: visible;
 }
-/* On the create screen the flower-board is the zoom container (no
-   .play-area wrapper). */
-body[data-screen="create"] .flower-board {
-    zoom: var(--play-zoom, 1);
-}
 .flower-bg {
     position: absolute;
     inset: 0;
@@ -716,7 +725,10 @@ body[data-screen="create"] .flower-board {
    or by horizontal scroll, and its width is always full viewport width. */
 .play-toolbar {
     position: fixed;
-    top: 2.2rem; /* sits flush under #topbar (height: 2.2rem) */
+    /* Tracks #topbar's measured height (set in JS as --topbar-h on :root).
+       Fallback covers the brief moment before the JS observer runs and
+       any non-play screens. */
+    top: var(--topbar-h, 2.2rem);
     left: 0;
     right: 0;
     z-index: 1500; /* above play-area badges (z=1000) and any lifted card */
@@ -812,6 +824,11 @@ body[data-screen="play"] #app-root {
     /* Force full viewport width — without this the default flex layout left
        the toolbar capped at ~1014 px on wide screens. */
     width: 100vw;
+    /* Always reserve the vertical-scrollbar gutter. Without this the gutter
+       only appears when the play-area extends (extension-first placement),
+       and the flower-board ends up shifted right of visual centre by half
+       the scrollbar width on the frames where it pops in. */
+    scrollbar-gutter: stable;
 }
 /* Create screen also has a flower-board that can overflow #app-root; same
    full-width treatment so the scrollbar lands at the viewport edge instead
@@ -826,6 +843,10 @@ body[data-screen="create"] #app-root {
        both horizontal and vertical scrollbars even when all cards fit. */
     padding: 0;
     gap: 0;
+    /* Same scrollbar-gutter reservation as the play screen — keeps the
+       flower-board horizontally centred when the play-area extends and
+       a vertical scrollbar appears. */
+    scrollbar-gutter: stable;
 }
 body[data-screen="create"] .flower-board {
     /* Drop the bottom margin too — same reason: no empty room under the
@@ -840,7 +861,7 @@ body[data-screen="create"] .flower-board {
     zoom: var(--play-zoom, 1);
     position: relative;
     flex-shrink: 0;
-    margin: 20px auto 0;
+    margin: 0 auto;
     touch-action: pan-x pan-y;
 }
 /* In the play screen the petal-words were rendering bigger than necessary

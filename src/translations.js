@@ -84,6 +84,38 @@ window.TRANSLATIONS = {
         // Info button
         howToPlay:          'How to play',
         info:               'Info',
+        // Info popup content. Inline HTML so we can keep headings/lists.
+        // Placeholders: {play} = play-button label, {extras} = decoy count,
+        // {decoysWord} = singular/plural noun (handled in main.js).
+        infoCreateHtml: '<h3>Clue-giving phase</h3>'
+            + '<p>Each green badge sits between two petals — read the two words touching that boundary (the right edge of the left petal and the left edge of the right petal) and write one word that links them both. Your clue may not contain either petal word.</p>'
+            + '<h3>What happens next</h3>'
+            + '<ol>'
+            + '<li>Tap the <strong>share</strong> icon to copy a link other players can open, or hand the device to them.</li>'
+            + '<li>Tap <strong>{play}</strong> to shuffle the petals (plus {extras} {decoysWord}) and start the puzzle.</li>'
+            + '<li>The other players drag each petal into a flower-slot and click it to rotate, until every boundary\'s two visible words fit your clue.</li>'
+            + '</ol>',
+        infoPlayHtml: '<h3>Goal</h3>'
+            + '<p>Place every petal in the right slot at the right rotation, so each green clue badge sits between the two petal-words it describes.</p>'
+            + '<h3>Petal mechanics</h3>'
+            + '<ul>'
+            + '<li>Each diamond petal has <strong>4 words</strong>, one per edge.</li>'
+            + '<li>The two top edges of adjacent petals (right edge of the left petal + left edge of the right petal) are what the clue between them refers to.</li>'
+            + '<li><strong>Drag</strong> a petal onto a flower-slot to place it.</li>'
+            + '<li><strong>Click</strong> a petal to rotate it 90° clockwise — there is no separate rotate icon.</li>'
+            + '<li>Some petals are <strong>decoys</strong>: they don\'t belong in any slot. Leave them outside the flower.</li>'
+            + '</ul>'
+            + '<h3>Buttons in the top bar</h3>'
+            + '<ul>'
+            + '<li><strong>Lock in</strong> (green) — enabled once every slot is filled. Checks your guess: any petal in the wrong slot OR at the wrong rotation is returned to the play area. The <em>Round</em> counter ticks up.</li>'
+            + '<li><strong>Reveal</strong> (red) — gives up: the flower solves itself.</li>'
+            + '<li><strong>Back arrow</strong> — exit the current game (with a confirmation).</li>'
+            + '<li><strong>Share</strong> — copy the game link so another player can join with the same flower.</li>'
+            + '</ul>'
+            + '<h3>Tip</h3>'
+            + '<p>The bottom-two edges of each petal don\'t have to match anything — only the top-two edges (the ones facing the clue badges) matter for scoring.</p>',
+        decoySingular:      'decoy',
+        decoyPlural:        'decoys',
         // Simple-dialog
         apply:              'Apply',
         clue:               'Clue',
@@ -189,6 +221,36 @@ window.TRANSLATIONS = {
         // Info button
         howToPlay:          'Spielanleitung',
         info:               'Info',
+        // Info popup content (HTML). Placeholders match the en block.
+        infoCreateHtml: '<h3>Hinweisphase</h3>'
+            + '<p>Jedes grüne Schild liegt zwischen zwei Blütenblättern — lies die beiden Wörter, die an dieser Grenze aneinanderstoßen (die rechte Kante des linken Blütenblatts und die linke Kante des rechten Blütenblatts), und schreibe ein Wort, das beide verbindet. Dein Hinweis darf keines der beiden Blütenblatt-Wörter enthalten.</p>'
+            + '<h3>Wie es weitergeht</h3>'
+            + '<ol>'
+            + '<li>Tippe auf das <strong>Teilen</strong>-Symbol, um einen Link zu kopieren, den andere Spieler öffnen können, oder reiche das Gerät weiter.</li>'
+            + '<li>Tippe auf <strong>{play}</strong>, um die Blütenblätter zu mischen (plus {extras} {decoysWord}) und das Rätsel zu starten.</li>'
+            + '<li>Die anderen Spieler ziehen jedes Blütenblatt in einen Slot und tippen zum Drehen darauf, bis an jeder Grenze die beiden sichtbaren Wörter zum Hinweis passen.</li>'
+            + '</ol>',
+        infoPlayHtml: '<h3>Ziel</h3>'
+            + '<p>Platziere jedes Blütenblatt im richtigen Slot mit der richtigen Drehung, sodass jedes grüne Hinweis-Schild zwischen den beiden Wörtern liegt, die es beschreibt.</p>'
+            + '<h3>So funktionieren die Blütenblätter</h3>'
+            + '<ul>'
+            + '<li>Jedes rautenförmige Blütenblatt hat <strong>4 Wörter</strong>, eines pro Kante.</li>'
+            + '<li>Die beiden oberen Kanten benachbarter Blütenblätter (rechte Kante des linken + linke Kante des rechten Blatts) sind das, worauf sich der Hinweis dazwischen bezieht.</li>'
+            + '<li><strong>Ziehe</strong> ein Blütenblatt in einen Slot, um es zu platzieren.</li>'
+            + '<li><strong>Tippe</strong> auf ein Blütenblatt, um es 90° im Uhrzeigersinn zu drehen — ein separates Dreh-Symbol gibt es nicht.</li>'
+            + '<li>Einige Blütenblätter sind <strong>Köder</strong>: sie gehören in keinen Slot. Lasse sie außerhalb der Blume liegen.</li>'
+            + '</ul>'
+            + '<h3>Buttons in der oberen Leiste</h3>'
+            + '<ul>'
+            + '<li><strong>Prüfen</strong> (grün) — verfügbar, sobald jeder Slot belegt ist. Prüft deinen Versuch: jedes Blütenblatt im falschen Slot ODER mit falscher Drehung wandert zurück in den Spielbereich. Der <em>Runden</em>-Zähler erhöht sich.</li>'
+            + '<li><strong>Auflösen</strong> (rot) — Aufgabe: die Blume löst sich selbst.</li>'
+            + '<li><strong>Zurück-Pfeil</strong> — das laufende Spiel verlassen (mit Rückfrage).</li>'
+            + '<li><strong>Teilen</strong> — den Spiel-Link kopieren, damit ein anderer Spieler dieselbe Blume bekommt.</li>'
+            + '</ul>'
+            + '<h3>Tipp</h3>'
+            + '<p>Die unteren beiden Kanten jedes Blütenblatts müssen zu nichts passen — nur die oberen beiden Kanten (die zu den Hinweis-Schildern zeigen) zählen für die Wertung.</p>',
+        decoySingular:      'Köder',
+        decoyPlural:        'Köder',
         // Simple-dialog
         apply:              'Übernehmen',
         clue:               'Hinweis',

@@ -334,6 +334,15 @@ function renderForScreen(screen) {
     if (screen === 'setup') {
         document.querySelectorAll('.play-toolbar').forEach((tb) => tb.remove());
     }
+    // Fresh entry into play/create: start at max layout AND visual zoom so
+    // the flower-board renders as large as possible. The auto-fit loop will
+    // shrink the layout scale only if cards genuinely don't fit. (The auto-
+    // fit re-render path bypasses this function, so its chosen smaller zoom
+    // isn't clobbered.)
+    if (screen === 'play' || screen === 'create') {
+        state.zoom = 1;
+        state.userZoom = 1;
+    }
     if (screen === 'create') renderCreate();
     else if (screen === 'play') renderPlay();
     else renderSetup();
@@ -348,13 +357,20 @@ window.addEventListener('popstate', (e) => {
 // the new size (handles landscape↔portrait transitions), and any petal-card
 // not currently in a slot is re-arranged into the new free space (so cards
 // can never end up overlapping the board / slots / badges after a resize).
-let _resizePending = false;
+//
+// Debounce to ~150ms: a single edge-drag fires dozens of resize events per
+// second, and each render does a full r.replaceChildren()→rebuild→
+// save/load/restore cycle. Without the debounce the user sees flicker while
+// dragging (the brief empty frame after replaceChildren multiplied by the
+// event rate). With it, we only render once after the user stops moving.
+let _resizeTimer = null;
 let _lastResizeSize = { w: 0, h: 0 };
+const RESIZE_DEBOUNCE_MS = 150;
 window.addEventListener('resize', () => {
-    if (document.body.dataset.screen !== 'play' || _resizePending) return;
-    _resizePending = true;
-    requestAnimationFrame(() => {
-        _resizePending = false;
+    if (document.body.dataset.screen !== 'play') return;
+    if (_resizeTimer != null) clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+        _resizeTimer = null;
         if (document.body.dataset.screen !== 'play') return;
         // If the viewport grew on either axis, reset to 100 % zoom so the
         // re-arrangement starts from the largest flower and the auto-fit
@@ -384,7 +400,7 @@ window.addEventListener('resize', () => {
         saveGameState();
         const saved = loadGameState();
         if (saved) restoreGameState(saved);
-    });
+    }, RESIZE_DEBOUNCE_MS);
 });
 
 // ----- topbar slots (back-button on the far left, action buttons on the right) -----
@@ -613,40 +629,15 @@ function makeInfoButton(htmlGetter) {
 
 function infoForCreate() {
     const extras = state.e || 0;
-    return `<h3>Clue-giving phase</h3>
-<p>Each green badge sits between two petals — read the two words touching that boundary (the right edge of the left petal and the left edge of the right petal) and write one word that links them both. Your clue may not contain either petal word.</p>
-
-<h3>What happens next</h3>
-<ol>
-<li>Tap the <strong>share</strong> icon to copy a link other players can open, or hand the device to them.</li>
-<li>Tap <strong>${t('play')}</strong> to shuffle the petals (plus ${extras} decoy${extras === 1 ? '' : 's'}) and start the puzzle.</li>
-<li>The other players drag each petal into a flower-slot and click it to rotate, until every boundary's two visible words fit your clue.</li>
-</ol>`;
+    return t('infoCreateHtml', {
+        play: t('play'),
+        extras: String(extras),
+        decoysWord: t(extras === 1 ? 'decoySingular' : 'decoyPlural'),
+    });
 }
 
 function infoForPlay() {
-    return `<h3>Goal</h3>
-<p>Place every petal in the right slot at the right rotation, so each green clue badge sits between the two petal-words it describes.</p>
-
-<h3>Petal mechanics</h3>
-<ul>
-<li>Each diamond petal has <strong>4 words</strong>, one per edge.</li>
-<li>The two top edges of adjacent petals (right edge of the left petal + left edge of the right petal) are what the clue between them refers to.</li>
-<li><strong>Drag</strong> a petal onto a flower-slot to place it.</li>
-<li><strong>Click</strong> a petal to rotate it 90° clockwise — there is no separate rotate icon.</li>
-<li>Some petals are <strong>decoys</strong>: they don't belong in any slot. Leave them outside the flower.</li>
-</ul>
-
-<h3>Buttons in the top bar</h3>
-<ul>
-<li><strong>Lock in</strong> (green) — enabled once every slot is filled. Checks your guess: any petal in the wrong slot OR at the wrong rotation is returned to the play area. The <em>Round</em> counter ticks up.</li>
-<li><strong>Reveal</strong> (red) — gives up: the flower solves itself.</li>
-<li><strong>Back arrow</strong> — exit the current game (with a confirmation).</li>
-<li><strong>Share</strong> — copy the game link so another player can join with the same flower.</li>
-</ul>
-
-<h3>Tip</h3>
-<p>The bottom-two edges of each petal don't have to match anything — only the top-two edges (the ones facing the clue badges) matter for scoring.</p>`;
+    return t('infoPlayHtml');
 }
 
 // Material-design "share" icon (three connected dots forming a "<" shape).
@@ -1796,8 +1787,22 @@ function renderPlay() {
     // fractional pixels; assigning that fraction back to play-area's inline
     // width/height makes the play-area a hair larger than #app-root's
     // integer client size and triggers spurious scrollbars.
-    const usableW = Math.max(240, Math.floor(appRect.width));
-    const usableH = Math.max(240, Math.floor(appRect.height));
+    // Use clientWidth (excludes the scrollbar gutter) instead of the bounding
+    // rect's width, so the play-area's inline width matches the actually-
+    // visible content rect. Otherwise everything centered to playW/2 ends up
+    // shifted right of the visual centre by half the scrollbar width once
+    // the extension-first placement triggers a vertical scrollbar.
+    const usableW = Math.max(240, r.clientWidth || Math.floor(appRect.width));
+    // The play-toolbar is position:fixed, so #app-root's rect ignores it —
+    // its top ~2.6rem is hidden behind the toolbar. Subtract the toolbar's
+    // measured height so the flower-board sizes against the actually-visible
+    // rectangle (was previously oversizing into the area under the toolbar
+    // and getting clipped, which made the flower look smaller than the
+    // viewport allowed). Read from the live element so a future toolbar
+    // height change doesn't desync the layout math.
+    const toolbarEl = playBar;
+    const toolbarH = toolbarEl ? Math.ceil(toolbarEl.getBoundingClientRect().height) : 42;
+    const usableH = Math.max(240, Math.floor(appRect.height) - toolbarH);
     // In PORTRAIT (height > width) the user wants the flower-stage itself
     // to fill the full screen width at 100 % zoom — clue-badges may
     // overflow horizontally beyond the visible viewport. In landscape we
@@ -1813,6 +1818,12 @@ function renderPlay() {
     // and re-runs the whole render, repeating until everything fits.
     let flowerSize = Math.max(120, fitMax * getZoom());
     state.cardSize = sd * flowerSize;
+    console.log('[arrange] dims', {
+        createMode, n: state.n, e: state.e,
+        usableW, usableH, isPortrait,
+        fitMax, zoom: getZoom(), userZoom: getUserZoom(),
+        flowerSize, cardSize: state.cardSize,
+    });
 
     // Build the board first so we know its exact (boardW × boardH) — those
     // become the play-area's dimensions (play-area = flower-board).
@@ -1829,14 +1840,16 @@ function renderPlay() {
     const boardH = flowerSize + 2 * stagePadY;
 
     // Play-area = the visible playable rect (= #app-root minus the toolbar).
-    // Flower-board sits at top-centre (directly below the toolbar) and takes
-    // its full height; the surrounding free space (sides in landscape, below
-    // in portrait) is where the petal-cards are laid out.
+    // We push it down by toolbarH so the toolbar (position:fixed, overlays
+    // the top of #app-root) doesn't cover the flower or stray cards. Its own
+    // height is usableH (already excludes the toolbar), so it ends flush
+    // against #app-root's bottom — no overflow.
     const playW = usableW;
     const playH = usableH;
     const playArea = el('div', { class: 'play-area', id: 'play-area' });
     playArea.style.width  = playW + 'px';
     playArea.style.height = playH + 'px';
+    playArea.style.marginTop = toolbarH + 'px';
     // --badge-scale scales clue-badge dimensions with the flower. The
     // 1.0 multiplier matches the rem-based defaults; bigger values (1.5)
     // overflowed the play screen visibly.
@@ -1848,9 +1861,12 @@ function renderPlay() {
     // without re-arranging anything.
     r.style.setProperty('--play-zoom', getUserZoom());
 
-    // Flower-board flush against play-area top, horizontally centred.
+    // Flower-board sits at the top of the play-area, horizontally centred.
+    // The play-area itself already starts below the toolbar (marginTop above),
+    // so no extra in-area gap is needed — the flower can use the full height.
+    const TOP_GAP = 0;
     const boardLeft = Math.max(0, (playW - boardW) / 2);
-    const boardTop  = 0;
+    const boardTop  = TOP_GAP;
     board.style.position = 'absolute';
     board.style.left = boardLeft + 'px';
     board.style.top  = boardTop + 'px';
@@ -1935,7 +1951,7 @@ function renderPlay() {
         const found = [];
         const centerX = (playW - state.cardSize) / 2;
         const ys = [];
-        for (let y = 0; y + state.cardSize <= maxY; y += Y_STEP) ys.push(y);
+        for (let y = TOP_GAP; y + state.cardSize <= maxY; y += Y_STEP) ys.push(y);
         // Always try the very bottom row too, so an extension of play-area
         // that doesn't land on a 100 px boundary still gets a placement
         // attempt at its lowest valid Y.
@@ -1963,16 +1979,54 @@ function renderPlay() {
         return found;
     }
 
+    // Extension-first: keep the flower at max size and GROW the play-area
+    // downward until every tray card has a slot. The extra height becomes
+    // scrollable space inside #app-root — the user can scroll to reach
+    // off-screen cards. Only if extension genuinely can't help (after a
+    // generous cap) do we fall back to shrinking the flower via state.zoom.
+    //
+    // findFreeSlots mutates the shared `obstacles` array (each placement
+    // becomes an obstacle so later cards don't overlap it). When we re-run
+    // with a larger maxY we must restore the baseline first, otherwise the
+    // previously-placed rects stay marked and the new call finds entirely
+    // NEW positions further down — losing the original tray spots and
+    // making cards appear to vanish off-screen.
+    const obstaclesBaseline = obstacles.slice();
+    const restoreObstacles = () => {
+        obstacles.length = 0;
+        obstacles.push(...obstaclesBaseline);
+    };
     let newSlots = findFreeSlots(playH, needPositions.length);
-    // Auto-fit: if not every card got a slot WITHIN the visible play-area
-    // (no extension allowed — cards must fit on screen without scrolling),
-    // reduce zoom by 10 % and re-render. Iterates down to ZOOM_MIN.
+    const EXTEND_STEP = Math.max(120, Math.floor(state.cardSize) + 20);
+    const MAX_EXTEND = 10 * EXTEND_STEP;     // ~10 extra card-rows worth
+    let extended = 0;
+    while (newSlots.length < needPositions.length && extended < MAX_EXTEND) {
+        extended += EXTEND_STEP;
+        restoreObstacles();
+        newSlots = findFreeSlots(playH + extended, needPositions.length);
+    }
+    if (extended > 0) {
+        playArea.style.height = (playH + extended) + 'px';
+    }
+    console.log('[arrange] placement', {
+        needPositions: needPositions.length,
+        newSlots: newSlots.length,
+        extended,
+        playW, playH: playH + extended,
+    });
+    // Last-resort shrink: extension hit MAX_EXTEND and still didn't fit them
+    // all. Shrink the flower one step and re-render. (Rare — usually the
+    // extension path finds room first.)
     if (newSlots.length < needPositions.length
             && getZoom() > ZOOM_MIN + 1e-6) {
         const nextZoom = Math.max(ZOOM_MIN,
             Math.round((getZoom() - 0.1) * 10) / 10);
+        console.log('[arrange] last-resort shrink', {
+            from: getZoom(), to: nextZoom,
+        });
         queueMicrotask(() => {
-            if (document.body.dataset.screen !== 'play') return;
+            const screen = document.body.dataset.screen;
+            if (screen !== 'play' && screen !== 'create') return;
             state.zoom = nextZoom;
             updateZoomButtonsState();
             saveSettings();
@@ -1981,8 +2035,12 @@ function renderPlay() {
                 if (!inSlot.has(parseInt(k, 10))) delete state.trayPositions[k];
             });
             saveGameState();
-            const saved = loadGameState();
-            if (saved) restoreGameState(saved);
+            if (screen === 'create') {
+                renderCreate();
+            } else {
+                const saved = loadGameState();
+                if (saved) restoreGameState(saved);
+            }
         });
         return;
     }
@@ -2000,6 +2058,7 @@ function renderPlay() {
         }
     });
 
+    const appendLog = { slotted: 0, tray: 0, slotMissing: 0, posMissing: 0 };
     state.palette.forEach((id) => {
         const card = makePlayPetal(id);
         card.style.width  = state.cardSize + 'px';
@@ -2010,20 +2069,30 @@ function renderPlay() {
             for (const k in state.placements) {
                 if (state.placements[k] === id) { slotIdx = parseInt(k, 10); break; }
             }
-            if (slotIdx == null) return;
+            if (slotIdx == null) { appendLog.slotMissing++; return; }
             const slotDrop = document.querySelector(
                 `.flower-slot[data-slot="${slotIdx}"] .slot-drop`);
             if (slotDrop) {
                 slotDrop.appendChild(card);
                 card.style.left = '';
                 card.style.top  = '';
+                appendLog.slotted++;
+            } else {
+                appendLog.slotMissing++;
             }
         } else {
             const pos = state.trayPositions[id];
+            if (!pos) { appendLog.posMissing++; return; }
             card.style.left = pos.x + 'px';
             card.style.top = pos.y + 'px';
             playArea.appendChild(card);
+            appendLog.tray++;
         }
+    });
+    console.log('[arrange] appended', {
+        paletteSize: state.palette.length,
+        placedIdsCount: placedIds.size,
+        ...appendLog,
     });
 
     // (Auto-fit happens up above, BEFORE positions are committed: if not
@@ -2080,6 +2149,37 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
     let pinchAnchorCY = 0;
     const tDist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
     const tMid  = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+    // Single source of truth: while this is true, the card pointer logic
+    // (drag / pan / long-press) MUST stay out of the way — otherwise its
+    // pointermove writes to appRoot.scrollLeft on every move and competes
+    // with the pinch's own anchor-based scroll, producing the "card moves
+    // while pinching" drift and the per-frame scroll flicker.
+    window._pinchActive = false;
+    // Coalesce per-touchmove DOM writes into one rAF — phones fire many
+    // touchmove events per frame, and writing --play-zoom + scrollLeft/Top
+    // on every one of them churns the compositor and reads as jank.
+    let pinchPendingMid = null;
+    let pinchPendingZoom = 0;
+    let pinchRAF = 0;
+    const releaseCardPointers = () => {
+        // Cancel any in-flight card drag/pan so it doesn't keep writing
+        // scroll. Cards expose this via setPointerCapture; releasing all
+        // captured pointers also stops further pointermove on them.
+        document.querySelectorAll('.petal-card').forEach((c) => {
+            try { c.releasePointerCapture && c.releasePointerCapture(0); } catch {}
+        });
+    };
+    const flushPinch = () => {
+        pinchRAF = 0;
+        if (!window._pinchActive || !pinchPendingMid) return;
+        const appRoot = document.getElementById('app-root');
+        if (!appRoot) return;
+        const rect = appRoot.getBoundingClientRect();
+        appRoot.style.setProperty('--play-zoom', pinchPendingZoom);
+        appRoot.scrollLeft = pinchAnchorCX * pinchPendingZoom - (pinchPendingMid.x - rect.left);
+        appRoot.scrollTop  = pinchAnchorCY * pinchPendingZoom - (pinchPendingMid.y - rect.top);
+        pinchPendingMid = null;
+    };
     window.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 2) return;
         const appRoot = document.getElementById('app-root');
@@ -2093,6 +2193,11 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
         // so we divide by z to get the pre-zoom content position.
         pinchAnchorCX = (appRoot.scrollLeft + (mid.x - rect.left)) / pinchZoom0;
         pinchAnchorCY = (appRoot.scrollTop  + (mid.y - rect.top )) / pinchZoom0;
+        window._pinchActive = true;
+        // If a card has already armed/started a drag with finger 1, kill it
+        // now so its pointermove doesn't fight the pinch for control of
+        // scroll for the rest of the gesture.
+        releaseCardPointers();
     }, { passive: true });
     window.addEventListener('touchmove', (e) => {
         if (e.touches.length !== 2 || pinchDist0 <= 0) return;
@@ -2100,27 +2205,23 @@ if (typeof window !== 'undefined' && !window._zoomGesturesBound) {
         if (!appRoot || !appRoot.contains(e.target)) return;
         e.preventDefault();
         const dist = tDist(e.touches[0], e.touches[1]);
-        // Quantise to 0.1 steps — keeps the gesture snappy on phones by
-        // suppressing per-frame CSS / scroll churn when the finger
-        // distance only nudges by a few pixels.
-        const newZoom = clampZoom(Math.round(pinchZoom0 * (dist / pinchDist0) * 10) / 10);
-        if (newZoom === state.userZoom) return;
-        // FAST PATH — skip setZoom (which calls saveSettings / writes
-        // localStorage on every frame and causes choppy pinch on phones).
-        // Apply the value directly to the CSS variable and in-memory state;
-        // the touchend handler commits + refreshes UI / persistence once.
+        // Quantise to 1 % steps so the pinch tracks finger motion smoothly.
+        // The earlier 10 % step felt notchy — the flower jumped in big
+        // chunks. Per-frame churn is no longer a worry because the rAF
+        // flush below batches everything into one write per frame.
+        const newZoom = clampZoom(Math.round(pinchZoom0 * (dist / pinchDist0) * 100) / 100);
+        // Stage the latest values; flush at most once per frame.
         state.userZoom = newZoom;
-        appRoot.style.setProperty('--play-zoom', newZoom);
-        // Re-position scroll so the anchor content point sits under the
-        // CURRENT midpoint.
-        const mid = tMid(e.touches[0], e.touches[1]);
-        const rect = appRoot.getBoundingClientRect();
-        appRoot.scrollLeft = pinchAnchorCX * newZoom - (mid.x - rect.left);
-        appRoot.scrollTop  = pinchAnchorCY * newZoom - (mid.y - rect.top );
+        pinchPendingZoom = newZoom;
+        pinchPendingMid  = tMid(e.touches[0], e.touches[1]);
+        if (!pinchRAF) pinchRAF = requestAnimationFrame(flushPinch);
     }, { passive: false });
     const endPinch = (e) => {
         if (e.touches.length < 2 && pinchDist0 > 0) {
             pinchDist0 = 0;
+            window._pinchActive = false;
+            if (pinchRAF) { cancelAnimationFrame(pinchRAF); pinchRAF = 0; }
+            flushPinch();    // make sure the final value is applied
             // Commit the gesture's final zoom: persist + refresh label.
             saveSettings();
             updateZoomButtonsState();
@@ -2558,7 +2659,17 @@ function openSimpleDialog(startBoundary) {
             onclick: () => {
                 applyBuffer();
                 overlay.remove();
-                commit(() => navigate('play'));
+                // Same hand-off as the create-screen Play button: drop the
+                // cluegiver-only state before navigating, otherwise renderPlay
+                // would still see createMode/helpers/pre-placements.
+                commit(() => {
+                    state.createMode = false;
+                    state.petals.length = state.n + (state.e || 0);
+                    state.placements = {};
+                    state.trayPositions = {};
+                    state.tries = 0;
+                    navigate('play');
+                });
             },
         }, t('play'));
         actions.appendChild(cancelBtn);
@@ -2796,6 +2907,11 @@ function makePlayPetal(id) {
 
     card.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        // Pinch-zoom owns the gesture: don't capture, don't arm long-press,
+        // and don't let an existing drag continue. Otherwise this handler's
+        // pointermove fights the pinch handler for control of scrollLeft/Top
+        // and the card visibly drifts while the user is just zooming.
+        if (window._pinchActive) return;
         e.preventDefault();
         try { card.setPointerCapture(e.pointerId); } catch {}
         activePointerId = e.pointerId;
@@ -2823,6 +2939,16 @@ function makePlayPetal(id) {
     card.addEventListener('pointermove', (e) => {
         if (e.pointerId !== activePointerId) return;
         if (mode === 'idle') return;
+        // A second finger landed → pinch took over. Cancel the long-press,
+        // stop tracking this pointer, and leave scroll alone so the pinch
+        // handler is the sole writer of scrollLeft/Top for the rest of the
+        // gesture.
+        if (window._pinchActive) {
+            if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+            activePointerId = null;
+            mode = 'idle';
+            return;
+        }
         const dx = e.clientX - startX;
         const dy = e.clientY - startY;
         const moved = Math.hypot(dx, dy);
@@ -3118,6 +3244,8 @@ function loadFromHash() {
     state.petals = p.p.map((words, i) => ({ id: i, words: words.slice(), rotation: 0 }));
     state.clues = p.c.slice();
     state.shuffleSeed = p.s || 1;
+    state.zoom = 1;
+    state.userZoom = 1;
     if (p.mode === 'edit') renderCreate();
     else renderPlay();
     return true;
@@ -3125,6 +3253,31 @@ function loadFromHash() {
 
 window.addEventListener('DOMContentLoaded', () => {
     loadSettings();
+    // Observe the topbar's actual height and publish it to CSS as
+    // --topbar-h, so .play-toolbar's `top` follows when the topbar wraps
+    // (action group drops to its own row when it can't fit beside the
+    // title). Without this the toolbar would hardcode 2.2rem and overlap
+    // the wrapped row.
+    const topbarEl = document.getElementById('topbar');
+    if (topbarEl) {
+        const publishTopbarH = () => {
+            const h = Math.ceil(topbarEl.getBoundingClientRect().height);
+            document.documentElement.style.setProperty('--topbar-h', h + 'px');
+        };
+        publishTopbarH();
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(publishTopbarH).observe(topbarEl);
+        } else {
+            window.addEventListener('resize', publishTopbarH);
+        }
+    }
+    // Fresh page load: start at max layout AND visual zoom so the flower-
+    // board renders as large as the current viewport allows. Auto-fit will
+    // shrink the layout scale only if it has to. (loadFromHash and
+    // renderForScreen do the same reset on their entry paths; the auto-fit
+    // re-render path skips it on purpose.)
+    state.zoom = 1;
+    state.userZoom = 1;
     if (loadFromHash()) {
         history.replaceState({ screen: 'play' }, '', location.href);
         return;

@@ -2454,7 +2454,6 @@ Zaun
 Zaunkönig
 Zeder
 Zehe
-Zehncent
 Zeichen
 Zeichnung
 Zeigefinger
