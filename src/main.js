@@ -215,7 +215,10 @@ function t(key, vars) {
          || (all && all.en          && all.en[key])
          || STRINGS[key]
          || key;
-    if (vars) for (const k in vars) s = s.replace('{' + k + '}', vars[k]);
+    if (vars) for (const k in vars) {
+        const re = new RegExp('\\{' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}', 'g');
+        s = s.replace(re, vars[k]);
+    }
     return s;
 }
 
@@ -1179,39 +1182,67 @@ function renderFlowerBoard(n, opts = {}) {
 // state.petals layout while in create mode:
 //   [0 .. n−1]            real petals (saved with the game)
 //   [n .. n+e−1]          decoys     (saved with game; play-time misdirection)
-//   [n+e .. n+e+1]        2 cluegiver-only HELPERS (NOT saved; not in payload)
-// Helpers are visible / draggable / rotatable in create; they get sliced
-// off before Save and before the Play hand-off so they never enter the game.
+//   [n+e ..]              cluegiver-only HELPERS spawned on demand whenever
+//                         a card is dragged out of a slot; sliced off before
+//                         Save and the Play hand-off so they never enter the
+//                         game.
 function renderCreate() {
     const baseLen = state.n + (state.e || 0);
-    const need    = baseLen + 2;
-    if (state.petals.length !== need) {
-        let avail = [];
-        try {
-            const pool = wordlistFor(state.lang);
-            const used = new Set();
-            state.petals.slice(0, baseLen).forEach((p) =>
-                p.words.forEach((w) => used.add(w)));
-            avail = pool.filter((w) => !used.has(w));
-            for (let i = avail.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [avail[i], avail[j]] = [avail[j], avail[i]];
-            }
-        } catch {}
-        state.petals.length = baseLen;
-        for (let i = 0; i < 2; i++) {
-            const slice = avail.slice(i * 4, i * 4 + 4);
-            while (slice.length < 4) slice.push('');
-            state.petals.push({ id: baseLen + i, words: slice, rotation: 0 });
-        }
-    }
+    // Drop any stale helpers from a prior session — entry into create always
+    // starts with full slots and an empty tray; new helpers spawn on demand
+    // as the user drags cards out (see spawnCreateHelperForSlot).
+    if (state.petals.length > baseLen) state.petals.length = baseLen;
     state.createMode = true;
-    // Pre-snap each real petal into its own slot. Helpers (and decoys) get
-    // tray positions computed by renderPlay's layout algorithm.
+    // Pre-snap each real petal into its own slot. Decoys (if any) get tray
+    // positions computed by renderPlay's layout algorithm.
     state.placements = {};
     for (let i = 0; i < state.n; i++) state.placements[i] = i;
     state.trayPositions = {};
     renderPlay();
+}
+
+// Build a fresh cluegiver-only helper petal and drop it straight into the
+// just-vacated slot. Called from the drag-out paths in create mode so the
+// flower always reads as "full" — there is never an empty slot the user has
+// to fill from a tray.
+function spawnCreateHelperForSlot(slotIdx) {
+    let words = ['', '', '', ''];
+    try {
+        const pool = wordlistFor(state.lang);
+        const used = new Set();
+        state.petals.forEach((p) =>
+            (p.words || []).forEach((w) => { if (w) used.add(w); }));
+        const avail = pool.filter((w) => !used.has(w));
+        for (let i = avail.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [avail[i], avail[j]] = [avail[j], avail[i]];
+        }
+        const picked = avail.slice(0, 4);
+        while (picked.length < 4) picked.push('');
+        words = picked;
+    } catch {}
+    const newId = state.petals.length;
+    state.petals.push({ id: newId, words, rotation: 0 });
+    state.petalRot = state.petalRot || {};
+    state.petalRot[newId] = 0;
+    if (Array.isArray(state.palette)) state.palette.push(newId);
+    state.placements[slotIdx] = newId;
+    const card = makePlayPetal(newId);
+    card.style.width  = state.cardSize + 'px';
+    card.style.height = state.cardSize + 'px';
+    const slotDrop = document.querySelector(
+        `.flower-slot[data-slot="${slotIdx}"] .slot-drop`);
+    if (slotDrop) {
+        slotDrop.appendChild(card);
+        card.style.left = '';
+        card.style.top  = '';
+    }
+    requestAnimationFrame(() => {
+        const root = document.getElementById('app-root') || document.body;
+        if (window.fitAllPetalWords) window.fitAllPetalWords(root);
+    });
+    if (typeof updatePlayButtonState === 'function') updatePlayButtonState();
+    return newId;
 }
 
 // Build the Google-style share icon button.
@@ -1781,8 +1812,10 @@ function renderPlay() {
             state.petals[i].rotation = state.petals[i].rotation || 0;
             state.petalRot[i] = state.petals[i].rotation;
         }
-        // Cluegiver sees N real petals + 2 helpers (NOT the e decoys —
-        // those are play-time misdirection only). N + 2 cards on screen.
+        // Cluegiver sees N real petals (slots pre-filled) plus any helpers
+        // already spawned past baseLen — NOT the e decoys, which are play-time
+        // misdirection only. Helpers start at zero and grow as the user drags
+        // real petals out of slots (see spawnCreateHelperForSlot).
         const baseLen = state.n + (state.e || 0);
         state.palette = state.petals
             .filter((_, i) => i < state.n || i >= baseLen)
@@ -3324,6 +3357,9 @@ function makePlayPetal(id) {
                 state.trayPositions[id] = { x: px, y: py };
                 const prevSlot = lookupSlot(id);
                 if (prevSlot != null) delete state.placements[prevSlot];
+                if (state.createMode && prevSlot != null) {
+                    spawnCreateHelperForSlot(prevSlot);
+                }
                 if (card.parentElement !== playArea) playArea.appendChild(card);
                 card.style.left = px + 'px';
                 card.style.top  = py + 'px';
@@ -3437,6 +3473,9 @@ function placePetal(petalId, slotIdx, currentAngleDeg, noShift) {
     // remove petalId from any previous slot
     const prevSlot = lookupSlot(petalId);
     if (prevSlot != null) delete state.placements[prevSlot];
+    if (state.createMode && prevSlot != null && prevSlot !== slotIdx) {
+        spawnCreateHelperForSlot(prevSlot);
+    }
 
     state.placements[slotIdx] = petalId;
     slotDrop.appendChild(card);
