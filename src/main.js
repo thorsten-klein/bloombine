@@ -59,6 +59,7 @@ const state = {
     lang: DEFAULT_LANG,
     n: 4,        // petals in the ring
     e: 1,        // extra decoy petals
+    extreme: false,  // extreme mode: clues also must be placed into badges by the player
     zoom: 1,     // LAYOUT scale (auto-fit only — re-renders & re-arranges)
     userZoom: 1, // VISUAL scale (manual zoom — CSS zoom, no re-arrange)
     petals: [],  // length n+e; petals[i].id = i; petals 0..n-1 are real (slot i), n..n+e-1 decoys
@@ -125,6 +126,7 @@ function saveGameState() {
             screen,
             n: state.n,
             e: state.e || 0,
+            extreme: !!state.extreme,
             lang: state.lang,
             petals: state.petals.map(p => ({ words: p.words })),
             clues: state.clues,
@@ -133,6 +135,8 @@ function saveGameState() {
             petalRot: state.petalRot,
             trayPositions: state.trayPositions,
             cardAngles: state.cardAngles,
+            cluePlacements: state.cluePlacements,
+            cluePositions: state.cluePositions,
             tries: state.tries || 0,
         };
         localStorage.setItem(GAME_STATE_KEY, JSON.stringify(data));
@@ -151,6 +155,7 @@ function restoreGameState(d) {
     state.lang = d.lang || DEFAULT_LANG;
     state.n = d.n;
     state.e = d.e || 0;
+    state.extreme = !!d.extreme;
     state.petals = d.petals.map((p, i) => ({
         id: i,
         words: (p && p.words) || p,
@@ -201,6 +206,27 @@ function restoreGameState(d) {
             // Pass noShift = true so the saved petal.rotation is preserved
             // exactly (placePetal would otherwise cycle it by rotationShift).
             placePetal(savedPl[slotKey], parseInt(slotKey, 10), undefined, true);
+        }
+        // Extreme mode: also restore clue-chip placements and free positions.
+        if (state.extreme) {
+            const savedCluePos = d.cluePositions || {};
+            state.cluePositions = state.cluePositions || {};
+            Object.keys(savedCluePos).forEach((k) => {
+                const idx = parseInt(k, 10);
+                const pos = savedCluePos[k];
+                if (!pos) return;
+                state.cluePositions[idx] = pos;
+                const chip = document.querySelector(
+                    `.clue-chip[data-clue-idx="${idx}"]`);
+                if (chip) {
+                    chip.style.left = pos.x + 'px';
+                    chip.style.top  = pos.y + 'px';
+                }
+            });
+            const savedClPl = d.cluePlacements || {};
+            for (const bKey of Object.keys(savedClPl)) {
+                placeClue(savedClPl[bKey], parseInt(bKey, 10));
+            }
         }
     } else {
         renderSetup();
@@ -267,7 +293,7 @@ function shuffleSeeded(arr, seed) {
 }
 
 // ----- URL share encoding -----
-// #s=base64(JSON({l, n, e, p:[[w0,w1,w2,w3]...], c:[...], s}))
+// #s=base64(JSON({l, n, e, x?, p:[[w0,w1,w2,w3]...], c:[...], s}))
 function encodeState(mode) {
     const m = (mode === 'edit') ? 'edit' : 'play';
     const payload = {
@@ -278,6 +304,7 @@ function encodeState(mode) {
         c: state.clues,
         s: state.shuffleSeed || 1,
     };
+    if (state.extreme) payload.x = 1;
     const json = JSON.stringify(payload);
     return '#s=' + btoa(unescape(encodeURIComponent(json))) + '&mode=' + m;
 }
@@ -679,6 +706,10 @@ function infoForCreate() {
     });
 }
 
+function infoForSetup() {
+    return t('infoSetupHtml', { start: t('start') });
+}
+
 function infoForPlay() {
     return t('infoPlayHtml');
 }
@@ -730,7 +761,7 @@ function stepper({ value, min, max, onChange }) {
 // ----- setup screen -----
 function renderSetup() {
     document.body.dataset.screen = 'setup';
-    setTopbarActions();
+    setTopbarActions(makeInfoButton(infoForSetup));
     setTopbarBack(null);
     const r = root();
     r.replaceChildren();
@@ -789,6 +820,24 @@ function renderSetup() {
         onChange: (n) => { state.e = n; saveSettings(); },
     }));
     form.appendChild(eField);
+
+    // extreme mode — players must also place the clues into badges.
+    const xField = el('label', { class: 'field extreme-field' });
+    const xLabel = el('span', { class: 'extreme-label' });
+    xLabel.appendChild(el('span', { class: 'extreme-title' }, t('extreme')));
+    xLabel.appendChild(el('span', { class: 'extreme-hint' }, t('extremeHint')));
+    xField.appendChild(xLabel);
+    const xToggle = el('span', { class: 'toggle' + (state.extreme ? ' on' : '') });
+    const xKnob = el('span', { class: 'toggle-knob' });
+    xToggle.appendChild(xKnob);
+    xField.appendChild(xToggle);
+    xField.addEventListener('click', (e) => {
+        e.preventDefault();
+        state.extreme = !state.extreme;
+        xToggle.classList.toggle('on', state.extreme);
+        saveSettings();
+    });
+    form.appendChild(xField);
 
     // language (currently only de, but UI is in place)
     const lField = el('label', { class: 'field' }, el('span', null, t('language')));
@@ -851,11 +900,6 @@ function renderSetup() {
         onclick: () => openGameSetPicker(),
     }, t('playSpecificGame')));
     card.appendChild(menuActions);
-
-    const rules = el('div', { class: 'rules' });
-    rules.appendChild(el('div', { class: 'rules-title' }, t('rules')));
-    rules.appendChild(el('p', null, t('rulesText')));
-    card.appendChild(rules);
 
     r.appendChild(card);
 }
@@ -1164,6 +1208,11 @@ function renderFlowerBoard(n, opts = {}) {
                 if (next) { next.focus(); next.select && next.select(); }
             });
             badge.appendChild(inp);
+        } else if (opts.clueDrop) {
+            // Extreme-mode PLAY: badge starts empty and accepts a clue-chip drop.
+            // The chip itself slides into .clue-drop via placeClue() on pointer-up.
+            badge.classList.add('clue-empty');
+            badge.appendChild(el('div', { class: 'clue-drop' }));
         } else {
             badge.appendChild(el('div', { class: 'clue-text' }, state.clues[k] || ''));
         }
@@ -1461,7 +1510,7 @@ function gamePayload() {
             w[(3 - r + 4) % 4],
         ];
     });
-    return {
+    const out = {
         l: state.lang,
         n: state.n,
         e: state.e,
@@ -1469,9 +1518,11 @@ function gamePayload() {
         c: state.clues,
         s: state.shuffleSeed || 1,
     };
+    if (state.extreme) out.x = 1;
+    return out;
 }
 function gameKey(g) {
-    return JSON.stringify([g.l, g.n, g.s, g.p, g.c]);
+    return JSON.stringify([g.l, g.n, g.s, g.p, g.c, g.x || 0]);
 }
 function addToGameSet(g) {
     const set = loadGameSet();
@@ -1579,12 +1630,16 @@ function playGameFromPayload(g) {
     state.lang = g.l || DEFAULT_LANG;
     state.n = g.n;
     state.e = g.e || 0;
+    state.extreme = !!g.x;
     state.petals = g.p.map((words, i) => ({ id: i, words: words.slice(), rotation: 0 }));
     state.clues = g.c.slice();
     state.shuffleSeed = g.s || 1;
     state.placements = {};
     state.trayPositions = {};
+    state.cluePlacements = {};
+    state.cluePositions = {};
     state.tries = 0;
+    state.revealed = false;
     state.createMode = false;
     location.hash = '';
     navigate('play');
@@ -1596,6 +1651,7 @@ function editGameFromPayload(g) {
     state.lang = g.l || DEFAULT_LANG;
     state.n = g.n;
     state.e = g.e || 0;
+    state.extreme = !!g.x;
     state.petals = g.p.map((words, i) => ({ id: i, words: words.slice(), rotation: 0 }));
     state.clues = g.c.slice();
     state.shuffleSeed = g.s || 1;
@@ -1852,7 +1908,10 @@ function renderPlay() {
                 state.petals.length = state.n + (state.e || 0);
                 state.placements = {};
                 state.trayPositions = {};
+                state.cluePlacements = {};
+                state.cluePositions = {};
                 state.tries = 0;
+                state.revealed = false;
                 navigate('play');
             }),
         }, t('play'));
@@ -1967,6 +2026,7 @@ function renderPlay() {
     //   one clue per boundary; play just shows the locked-in clue text.
     const board = renderFlowerBoard(state.n, {
         clueInput: createMode,
+        clueDrop: !createMode && !!state.extreme,
         onSlotDrop: (slotIdx, petalId) => placePetal(petalId, slotIdx),
         size: flowerSize,
     });
@@ -2090,6 +2150,54 @@ function renderPlay() {
         if (saved) obstacles.push(cardRectAt(saved.x, saved.y));
         else       needPositions.push({ idx, id });
     });
+
+    // Extreme mode: pre-compute clue-chip positions for chips NOT currently
+    // in a badge — and mark their rects as obstacles BEFORE petal layout
+    // runs, so petal cards never get placed underneath a chip. Chips are
+    // sized to the slot/card-size so the layout reads as a single uniform
+    // grid of squares. Positions are written into state.cluePositions; the
+    // DOM chips are instantiated further down using these positions.
+    if (!createMode && state.extreme) {
+        state.cluePlacements = state.cluePlacements || {};
+        state.cluePositions  = state.cluePositions  || {};
+        const placedClues = new Set(Object.values(state.cluePlacements));
+        // Match the chip's free-floating size to the badge it'll snap into —
+        // badges are wide pill rectangles, so measuring a real one gives the
+        // right shape. offsetWidth/offsetHeight return the pre-transform box
+        // (badges are CSS-rotated by --boundary-angle, so getBoundingClientRect
+        // would give a skewed value). Fallback dimensions cover any browser
+        // where the measurement is 0 before paint.
+        const sampleBadge = playArea.querySelector('.clue-badge');
+        const chipW = (sampleBadge && sampleBadge.offsetWidth)
+            || Math.round(state.cardSize);
+        const chipH = (sampleBadge && sampleBadge.offsetHeight)
+            || Math.round(state.cardSize * 0.25);
+        state.clueChipW = chipW;
+        state.clueChipH = chipH;
+        const gap = 8;
+        const perRow = Math.max(1, Math.floor((playW - gap) / (chipW + gap)));
+        // Stable per-game shuffle of clue indices so the bottom-strip
+        // ordering doesn't accidentally hint at the correct boundary.
+        const order = shuffleSeeded(
+            Array.from({ length: state.n }, (_, i) => i),
+            (state.shuffleSeed || 1) ^ 0xC1A5);
+        order.forEach((idx, slot) => {
+            // Seed a fallback tray-position even for chips already in badges
+            // — lockInGuess may later kick them back to the play area.
+            let saved = state.cluePositions[idx];
+            if (!saved) {
+                const row = Math.floor(slot / perRow);
+                const col = slot % perRow;
+                saved = {
+                    x: gap + col * (chipW + gap),
+                    y: playH - (row + 1) * (chipH + gap),
+                };
+                state.cluePositions[idx] = saved;
+            }
+            if (placedClues.has(idx)) return;
+            obstacles.push({ x: saved.x, y: saved.y, w: chipW, h: chipH });
+        });
+    }
 
     // Placement algorithm: walk Y top → bottom in Y_STEP px steps. At each row,
     // start at the horizontal centre and try ±X_STEP px outward (centre, ‑X_STEP,
@@ -2226,6 +2334,37 @@ function renderPlay() {
             playArea.appendChild(card);
         }
     });
+
+    // Extreme-mode PLAY: spawn the chip DOM using positions pre-computed
+    // above (which were also added to the petal-layout obstacle list, so no
+    // chip ends up underneath a petal). Already-placed chips snap into
+    // their badge via the drop-zone append below.
+    if (!createMode && state.extreme) {
+        const placedClues = new Set(Object.values(state.cluePlacements || {}));
+        // Use the dimensions measured during the obstacle-seeding pass so the
+        // tray chips visually match the badge they'll snap into.
+        const chipW = state.clueChipW || Math.round(state.cardSize);
+        const chipH = state.clueChipH || Math.round(state.cardSize * 0.25);
+        for (let idx = 0; idx < state.n; idx++) {
+            const chip = makeClueChip(idx);
+            chip.style.width  = chipW + 'px';
+            chip.style.height = chipH + 'px';
+            if (placedClues.has(idx)) {
+                const b = lookupClueBadge(idx);
+                if (b != null) {
+                    const drop = document.querySelector(
+                        `.clue-badge[data-boundary="${b}"] .clue-drop`);
+                    if (drop) drop.appendChild(chip);
+                }
+                continue;
+            }
+            const pos = (state.cluePositions || {})[idx];
+            if (!pos) continue;
+            chip.style.left = pos.x + 'px';
+            chip.style.top  = pos.y + 'px';
+            playArea.appendChild(chip);
+        }
+    }
 
     // (Auto-fit happens up above, BEFORE positions are committed: if not
     // all cards fit at the current state.zoom, we abort this render and
@@ -2563,11 +2702,15 @@ function updateTryCounter() {
 }
 
 // Lock-in is only enabled once every flower slot has a petal-card in it.
+// In extreme mode every clue badge must also be filled with a chip.
+// After Reveal (state.revealed) the puzzle is over — Submit stays disabled.
 function updateLockInButtonState() {
     const btn = document.getElementById('btn-lockin');
     if (btn) {
-        const filled = Object.keys(state.placements || {}).length === state.n;
-        btn.disabled = !filled;
+        const slotsFilled  = Object.keys(state.placements || {}).length === state.n;
+        const cluesFilled  = !state.extreme || state.createMode
+            || Object.keys(state.cluePlacements || {}).length === state.n;
+        btn.disabled = !!state.revealed || !(slotsFilled && cluesFilled);
     }
     // Create-mode reuses the same drag/place callsites — keep Save's
     // disabled state in sync with the current slot fill.
@@ -2576,24 +2719,79 @@ function updateLockInButtonState() {
 
 // "Lock in" — remove every placed petal that isn't correct (wrong slot OR
 // wrong rotation), bump the try counter, and let the player keep going.
+//
+// Normal mode: clue badges are pre-printed, so slot k is fixed-by-clue —
+// petal i must land in slot i. Strict equality.
+//
+// Extreme mode: badges arrive EMPTY, so the whole solution has rotational
+// symmetry. The player can legitimately start at any slot, and any consistent
+// offset r ∈ [0..n−1] where every petal i lands at slot (i+r)%n and every
+// clue i lands at boundary (i+r)%n is just as valid. We pick the r that the
+// most placed items agree on (their "intended" orientation) and mark any
+// item that disagrees as wrong.
 function lockInGuess() {
+    let r = 0;                                  // rotational offset (normal: 0)
+    if (state.extreme) {
+        const counts = new Array(state.n).fill(0);
+        for (const sKey of Object.keys(state.placements || {})) {
+            const s = parseInt(sKey, 10);
+            const p = state.placements[sKey];
+            counts[(s - p + state.n) % state.n]++;
+        }
+        for (const bKey of Object.keys(state.cluePlacements || {})) {
+            const b = parseInt(bKey, 10);
+            const c = state.cluePlacements[bKey];
+            counts[(b - c + state.n) % state.n]++;
+        }
+        for (let i = 1; i < state.n; i++) {
+            if (counts[i] > counts[r]) r = i;
+        }
+    }
+
     const wrong = [];
     for (const slotKey of Object.keys(state.placements)) {
         const slot = parseInt(slotKey, 10);
         const petalId = state.placements[slot];
-        const placedOk = petalId === slot;
+        const placedOk = ((slot - petalId + state.n) % state.n) === r;
         const rotOk = (state.petals[petalId] || {}).rotation === 0;
         if (!placedOk || !rotOk) wrong.push(petalId);
     }
     for (const id of wrong) returnToTray(id);
+
+    let wrongClues = 0;
+    if (state.extreme) {
+        const cp = state.cluePlacements || {};
+        // Snapshot keys first — returnClueToTray mutates cluePlacements
+        // mid-iteration, which would otherwise skip the next entry.
+        for (const bKey of Object.keys(cp).slice()) {
+            const b = parseInt(bKey, 10);
+            const c = cp[bKey];
+            if (((b - c + state.n) % state.n) !== r) {
+                wrongClues++;
+                returnClueToTray(c);
+            }
+        }
+    }
+
     state.tries = (state.tries || 0) + 1;
     updateTryCounter();
     updateLockInButtonState();
-    if (wrong.length === 0 && Object.keys(state.placements).length === state.n) {
+    const petalsAllRight = wrong.length === 0
+        && Object.keys(state.placements).length === state.n;
+    const cluesAllRight  = !state.extreme || (
+        wrongClues === 0
+        && Object.keys(state.cluePlacements || {}).length === state.n);
+    if (petalsAllRight && cluesAllRight) {
         markGameDone(gamePayload());
         showAllCorrectModal();
     } else {
-        showBanner(t('score', { c: state.n - wrong.length, t: state.n }));
+        // Score line: petals correct (always shown). Extreme adds clue score.
+        const right = state.n - wrong.length;
+        const msg = state.extreme
+            ? t('score', { c: right, t: state.n })
+                + ' · ' + t('score', { c: state.n - wrongClues, t: state.n })
+            : t('score', { c: right, t: state.n });
+        showBanner(msg);
     }
     saveGameState();
 }
@@ -2655,7 +2853,8 @@ function showAllCorrectModal() {
 
 // Reveal — auto-place every real petal in its correct slot at rotation 0,
 // then morph the Reveal button into an Exit button that returns to the
-// main menu (clearing the saved game and any share-URL hash).
+// main menu (clearing the saved game and any share-URL hash). Extreme mode
+// also snaps each clue chip into its matching badge.
 function doReveal() {
     for (let i = 0; i < state.n; i++) {
         state.petals[i].rotation = 0;
@@ -2664,8 +2863,17 @@ function doReveal() {
         if (card) window.refreshPetalCard(card, state.petals[i]);
         placePetal(i, i);
     }
+    if (state.extreme) {
+        for (let i = 0; i < state.n; i++) placeClue(i, i);
+    }
     markGameDone(gamePayload());
+    // Lock the "revealed" status so subsequent updateLockInButtonState calls
+    // (triggered by any post-reveal drag) keep Submit disabled.
+    state.revealed = true;
     saveGameState();
+
+    const submitBtn = document.getElementById('btn-lockin');
+    if (submitBtn) submitBtn.disabled = true;
 
     const btn = document.getElementById('btn-reveal');
     if (btn) {
@@ -3534,6 +3742,211 @@ function lookupSlot(petalId) {
     return null;
 }
 
+// ----- extreme-mode clue chips -----
+// A draggable chip carrying one of the clues. Player drags it onto a
+// .clue-badge whose .clue-drop accepts it; on drop the chip slots into the
+// badge via placeClue(). Plain pointer drag — no rotation, no long-press.
+function makeClueChip(idx) {
+    const chip = document.createElement('div');
+    chip.className = 'clue-chip';
+    chip.dataset.clueIdx = String(idx);
+    chip.style.position = 'absolute';
+    chip.style.touchAction = 'pinch-zoom';
+    chip.style.userSelect = 'none';
+    chip.style.webkitUserSelect = 'none';
+    chip.style.zIndex = String(2000 + idx);
+    const inner = document.createElement('div');
+    inner.className = 'clue-chip-text';
+    inner.textContent = state.clues[idx] || '';
+    chip.appendChild(inner);
+
+    // ---- drag state ----
+    let dragging = false;
+    let pointerId = null;
+    let startX = 0, startY = 0;
+    let dragOffsetX = 0, dragOffsetY = 0;
+    let prevPlay = null;
+    const DRAG_THRESHOLD = 4;
+
+    function liftToBody(e) {
+        // Snapshot current screen position so the chip stays visually put
+        // when it leaves its slot/play-area parent for <body>. When the chip
+        // is inside a rotated .clue-badge, getBoundingClientRect returns the
+        // ROTATED bounding box — width/height get swapped on side badges, so
+        // we'd lift the chip at the wrong size. Use the canonical tray size
+        // (state.clueChipW/H) and center on the rect's centre, which IS
+        // rotation-invariant.
+        const r = chip.getBoundingClientRect();
+        const cx = r.left + r.width  / 2;
+        const cy = r.top  + r.height / 2;
+        const W = state.clueChipW || r.width;
+        const H = state.clueChipH || r.height;
+        prevPlay = chip.parentElement;
+        chip.style.position = 'fixed';
+        chip.style.width  = W + 'px';
+        chip.style.height = H + 'px';
+        chip.style.left = (cx - W / 2) + 'px';
+        chip.style.top  = (cy - H / 2) + 'px';
+        chip.style.margin = '0';
+        chip.style.transform = '';
+        document.body.appendChild(chip);
+        // Some browsers (and reparenting from a rotated ancestor like
+        // .clue-badge in particular) implicitly release pointer capture on
+        // detach, so pointerup never reaches us and the chip "sticks" to
+        // the cursor. Re-acquire capture after reparenting.
+        if (pointerId != null) {
+            try { chip.setPointerCapture(pointerId); } catch {}
+        }
+        chip.classList.add('dragging');
+        // If this chip was already in a badge, free that placement up; a new
+        // drop on a badge will re-assign it.
+        const prevBoundary = lookupClueBadge(idx);
+        if (prevBoundary != null) delete state.cluePlacements[prevBoundary];
+        // Cursor offset relative to the chip's NEW top-left (after re-centering
+        // on the old rect's centre). Keeps the drag-follow feel natural.
+        dragOffsetX = e.clientX - (cx - W / 2);
+        dragOffsetY = e.clientY - (cy - H / 2);
+    }
+
+    chip.addEventListener('pointerdown', (e) => {
+        // Left/touch only — ignore right-click, middle-click, pinch.
+        if (e.button != null && e.button !== 0) return;
+        if (window._multiTouchActive) return;
+        e.preventDefault();
+        pointerId = e.pointerId;
+        startX = e.clientX;
+        startY = e.clientY;
+        dragging = false;
+        try { chip.setPointerCapture(pointerId); } catch {}
+    });
+    chip.addEventListener('pointermove', (e) => {
+        if (pointerId == null || e.pointerId !== pointerId) return;
+        if (!dragging) {
+            if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD) return;
+            dragging = true;
+            liftToBody(e);
+        }
+        chip.style.left = (e.clientX - dragOffsetX) + 'px';
+        chip.style.top  = (e.clientY - dragOffsetY) + 'px';
+    });
+    function endPointer(e, cancelled) {
+        if (pointerId == null || (e && e.pointerId !== pointerId)) return;
+        try { chip.releasePointerCapture(pointerId); } catch {}
+        pointerId = null;
+        if (!dragging) return;
+        dragging = false;
+        chip.classList.remove('dragging');
+        // Strip the fixed-positioning overrides; the placement code below
+        // reapplies position via parent appendChild + left/top. Width/height
+        // stay set so the chip keeps its canonical tray size on a free drop;
+        // placeClue clears them so the badge's CSS can stretch the chip.
+        chip.style.position = 'absolute';
+        chip.style.margin = '';
+        if (cancelled || !e) {
+            // Restore to wherever it was before lift.
+            const prevBoundary = lookupClueBadge(idx);
+            if (prevBoundary != null) {
+                placeClue(idx, prevBoundary);
+            } else {
+                returnClueToTray(idx);
+            }
+            return;
+        }
+        chip.style.pointerEvents = 'none';
+        const target = document.elementFromPoint(e.clientX, e.clientY);
+        chip.style.pointerEvents = '';
+        const badgeEl = target && target.closest && target.closest('.clue-badge');
+        const boundary = badgeEl ? parseInt(badgeEl.dataset.boundary, 10) : NaN;
+        if (Number.isFinite(boundary)) {
+            placeClue(idx, boundary);
+            return;
+        }
+        // Free drop into the play-area: park it where released, keeping the
+        // tray-size width/height already on the chip from liftToBody.
+        const playArea = document.getElementById('play-area');
+        if (playArea) {
+            const rect = playArea.getBoundingClientRect();
+            const z = getUserZoom();
+            const px = (e.clientX - dragOffsetX - rect.left) / z;
+            const py = (e.clientY - dragOffsetY - rect.top)  / z;
+            state.cluePositions = state.cluePositions || {};
+            state.cluePositions[idx] = { x: px, y: py };
+            if (chip.parentElement !== playArea) playArea.appendChild(chip);
+            chip.style.width  = (state.clueChipW || chip.offsetWidth)  + 'px';
+            chip.style.height = (state.clueChipH || chip.offsetHeight) + 'px';
+            chip.style.left = px + 'px';
+            chip.style.top  = py + 'px';
+            updateLockInButtonState();
+            saveGameState();
+        }
+    }
+    chip.addEventListener('pointerup',     (e) => endPointer(e, false));
+    chip.addEventListener('pointercancel', (e) => endPointer(e, true));
+    return chip;
+}
+
+function lookupClueBadge(clueIdx) {
+    const cp = state.cluePlacements || {};
+    for (const k in cp) if (cp[k] === clueIdx) return parseInt(k, 10);
+    return null;
+}
+
+// Move a clue chip into a clue-badge's drop zone, kicking any existing chip
+// in that badge back to the tray. Mirrors placePetal but simpler: no rotation.
+function placeClue(clueIdx, boundary) {
+    const chip = document.querySelector(`.clue-chip[data-clue-idx="${clueIdx}"]`);
+    if (!chip) return;
+    chip.classList.remove('correct', 'wrong');
+    const badge = document.querySelector(
+        `.clue-badge[data-boundary="${boundary}"]`);
+    const drop = badge && badge.querySelector('.clue-drop');
+    if (!drop) return;
+    state.cluePlacements = state.cluePlacements || {};
+    const existing = drop.querySelector('.clue-chip');
+    if (existing && existing !== chip) {
+        const exId = parseInt(existing.dataset.clueIdx, 10);
+        const exB  = lookupClueBadge(exId);
+        if (exB != null) delete state.cluePlacements[exB];
+        returnClueToTray(exId);
+    }
+    const prev = lookupClueBadge(clueIdx);
+    if (prev != null) delete state.cluePlacements[prev];
+    state.cluePlacements[boundary] = clueIdx;
+    chip.style.position = '';
+    chip.style.left = '';
+    chip.style.top  = '';
+    chip.style.transform = '';
+    // Clear width/height so the badge's CSS rule (.clue-drop .clue-chip
+    // { width:100%; height:100% }) stretches the chip to fill the badge.
+    chip.style.width  = '';
+    chip.style.height = '';
+    drop.appendChild(chip);
+    updateLockInButtonState();
+    saveGameState();
+}
+
+function returnClueToTray(clueIdx) {
+    const chip = document.querySelector(`.clue-chip[data-clue-idx="${clueIdx}"]`);
+    if (!chip) return;
+    chip.classList.remove('correct', 'wrong');
+    const prev = lookupClueBadge(clueIdx);
+    if (prev != null) delete state.cluePlacements[prev];
+    const area = document.getElementById('play-area');
+    if (area) area.appendChild(chip);
+    chip.style.position = 'absolute';
+    // Reset to the canonical tray size — the chip was at the badge's 100%/100%
+    // while placed, which can differ from the tray size if the badge stretched.
+    if (state.clueChipW) chip.style.width  = state.clueChipW + 'px';
+    if (state.clueChipH) chip.style.height = state.clueChipH + 'px';
+    const pos = (state.cluePositions || {})[clueIdx];
+    if (pos) {
+        chip.style.left = pos.x + 'px';
+        chip.style.top  = pos.y + 'px';
+    }
+    updateLockInButtonState();
+    saveGameState();
+}
+
 // ----- clipboard helper -----
 function tryCopy(text) {
     try {
@@ -3562,9 +3975,15 @@ function loadFromHash() {
     state.lang = p.l || DEFAULT_LANG;
     state.n = p.n;
     state.e = p.e || 0;
+    state.extreme = !!p.x;
     state.petals = p.p.map((words, i) => ({ id: i, words: words.slice(), rotation: 0 }));
     state.clues = p.c.slice();
     state.shuffleSeed = p.s || 1;
+    state.placements = {};
+    state.trayPositions = {};
+    state.cluePlacements = {};
+    state.cluePositions = {};
+    state.revealed = false;
     state.zoom = 1;
     state.userZoom = 1;
     if (p.mode === 'edit') renderCreate();
