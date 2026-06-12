@@ -476,6 +476,11 @@ body {
 }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+/* Submit (#btn-lockin) goes pseudo-invisible when disabled — the dimmed
+   text was easy to mistake for an active button. Color-transparent keeps
+   the button's footprint but hides the label entirely; the user sees a
+   clearly inert green block instead of a faded "Submit". */
+#btn-lockin:disabled { color: transparent; }
 .btn.primary {
     background: var(--primary);
     color: #0d2a1a;
@@ -606,7 +611,17 @@ body {
        lifted/dragged card (z = 100) and the clue badges (z = 1000) stay on
        top — they're set high enough to clear this. */
     z-index: 50;
+    /* pointer-events: none on the EMPTY frame so a free-floating tray card
+       that happens to land underneath an empty slot isn't trapped (the slot
+       would otherwise eat every pointerdown on the card-area-it-covers).
+       The placed petal-card inside an occupied slot re-enables its own
+       pointer events via .petal-card{pointer-events:auto} below, so drag /
+       click still work on placed cards. Slot drop-target detection runs on
+       geometry in main.js, so making the slot pointer-transparent doesn't
+       affect drop snapping. */
+    pointer-events: none;
 }
+.flower-slot .petal-card { pointer-events: auto; }
 .slot-drop {
     width: 100%;
     height: 100%;

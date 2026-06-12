@@ -137,6 +137,7 @@ function saveGameState() {
             cardAngles: state.cardAngles,
             cluePlacements: state.cluePlacements,
             cluePositions: state.cluePositions,
+            revealed: !!state.revealed,
             tries: state.tries || 0,
         };
         localStorage.setItem(GAME_STATE_KEY, JSON.stringify(data));
@@ -156,6 +157,10 @@ function restoreGameState(d) {
     state.n = d.n;
     state.e = d.e || 0;
     state.extreme = !!d.extreme;
+    // Restore revealed up-front so renderPlay's updateLockInButtonState
+    // honours it (state.revealed wins over slotsFilled/cluesFilled in
+    // updateLockInButtonState — see that function).
+    state.revealed = !!d.revealed;
     state.petals = d.petals.map((p, i) => ({
         id: i,
         words: (p && p.words) || p,
@@ -228,6 +233,15 @@ function restoreGameState(d) {
                 placeClue(savedClPl[bKey], parseInt(bKey, 10));
             }
         }
+        // If the saved game was already finished (Reveal clicked, or Submit
+        // succeeded), morph the Reveal button to Exit. Submit is already
+        // disabled because state.revealed (set up-front above) is honored
+        // by updateLockInButtonState during render + placement restoration.
+        if (state.revealed) {
+            const submitBtn = document.getElementById('btn-lockin');
+            if (submitBtn) submitBtn.disabled = true;
+            morphRevealToExit(false);
+        }
     } else {
         renderSetup();
     }
@@ -294,17 +308,28 @@ function shuffleSeeded(arr, seed) {
 
 // ----- URL share encoding -----
 // #s=base64(JSON({l, n, e, x?, p:[[w0,w1,w2,w3]...], c:[...], s}))
+// In CREATE mode we delegate to gamePayload() so the URL captures the
+// same puzzle Save / Play would store: placements + baked rotations,
+// not the original index-ordered petal list (which would ship a different
+// puzzle as soon as the cluegiver swapped a card or rotated one).
+// In PLAY mode we keep the original word list — re-baking would let a
+// player's mid-game rotation leak into the shared URL.
 function encodeState(mode) {
     const m = (mode === 'edit') ? 'edit' : 'play';
-    const payload = {
-        l: state.lang,
-        n: state.n,
-        e: state.e,
-        p: state.petals.map(p => p.words),
-        c: state.clues,
-        s: state.shuffleSeed || 1,
-    };
-    if (state.extreme) payload.x = 1;
+    let payload;
+    if (state.createMode) {
+        payload = gamePayload();
+    } else {
+        payload = {
+            l: state.lang,
+            n: state.n,
+            e: state.e,
+            p: state.petals.map(p => p.words),
+            c: state.clues,
+            s: state.shuffleSeed || 1,
+        };
+        if (state.extreme) payload.x = 1;
+    }
     const json = JSON.stringify(payload);
     return '#s=' + btoa(unescape(encodeURIComponent(json))) + '&mode=' + m;
 }
@@ -1450,10 +1475,21 @@ function commit(then) {
         }
         const vLow = v.toLowerCase();
         let bad = null;
-        // Forbid the clue from containing either boundary word.
-        const p1 = state.petals[k];
-        const p2 = state.petals[(k + 1) % state.n];
-        const candidates = [p1.words[1], p2.words[3]];
+        // Forbid the clue from containing either boundary word. Read the
+        // actual petals AT slot k and slot k+1 (placements, after any
+        // cluegiver swap), not state.petals[k]/[k+1] which assumes the
+        // never-moved layout and gives false readings once a helper has
+        // been dropped into a slot.
+        const ph = state.placements || {};
+        const id1 = ph[k];
+        const id2 = ph[(k + 1) % state.n];
+        const p1 = (id1 != null && state.petals[id1]) ? state.petals[id1] : state.petals[k];
+        const p2 = (id2 != null && state.petals[id2]) ? state.petals[id2] : state.petals[(k + 1) % state.n];
+        // Use rotation-baked words so the right/left edge picked matches
+        // what the cluegiver actually sees on screen.
+        const w1 = bakePetalWords(p1);
+        const w2 = bakePetalWords(p2);
+        const candidates = [w1[1], w2[3]];
         for (const w of candidates) {
             const wLow = (w || '').toLowerCase();
             if (!wLow) continue;
@@ -1489,27 +1525,61 @@ function loadGameSet() {
 function saveGameSet(arr) {
     try { localStorage.setItem(GAME_SET_KEY, JSON.stringify(arr)); } catch {}
 }
+// Bake a petal's cluegiver-side rotation into a fresh words array so the
+// saved payload reflects what the cluegiver actually sees on screen —
+// without needing a rotation field in the schema.
+//   With rotation r, the rendered word at edge e is words[(e - r) % 4];
+//   permute so visible[e] becomes saved[e].
+function bakePetalWords(p) {
+    const r = (((p.rotation || 0) % 4) + 4) % 4;
+    if (r === 0) return p.words.slice();
+    const w = p.words;
+    return [
+        w[(0 - r + 4) % 4],
+        w[(1 - r + 4) % 4],
+        w[(2 - r + 4) % 4],
+        w[(3 - r + 4) % 4],
+    ];
+}
+
 function gamePayload() {
-    // Bake each petal's cluegiver-side rotation into the words array so
-    // the saved payload reflects what the cluegiver actually sees on
-    // screen — without needing a rotation field in the schema.
-    //   With rotation r, the rendered word at edge e is words[(e - r) % 4];
-    //   permute so visible[e] becomes saved[e].
-    // In create mode there are 2 cluegiver-only HELPERS appended past
-    // [n + e]. Slice them off so the saved payload contains only the
-    // real petals + decoys the player will see.
-    const baseLen = state.n + (state.e || 0);
-    const baked = state.petals.slice(0, baseLen).map((p) => {
-        const r = (((p.rotation || 0) % 4) + 4) % 4;
-        if (r === 0) return p.words.slice();
-        const w = p.words;
-        return [
-            w[(0 - r + 4) % 4],
-            w[(1 - r + 4) % 4],
-            w[(2 - r + 4) % 4],
-            w[(3 - r + 4) % 4],
-        ];
-    });
+    // In CREATE mode the puzzle is whatever the cluegiver placed: slot k's
+    // petal = state.placements[k] (could be a real petal, a decoy, or a
+    // spawned helper — anything is fair). Decoys for the player's tray are
+    // any e petals NOT currently in a slot. Using slice(0, n+e) here would
+    // mean a helper swapped into a slot is ignored and the original real
+    // petal at that index leaks into the saved payload — the player would
+    // get a puzzle that doesn't match the clues the cluegiver wrote.
+    //
+    // In PLAY mode there are no helpers and no swap — state.petals[0..n+e-1]
+    // already IS the puzzle definition, so the simpler slice path applies.
+    const baked = [];
+    const decoyCount = state.e || 0;
+    if (state.createMode) {
+        const ph = state.placements || {};
+        for (let k = 0; k < state.n; k++) {
+            const id = ph[k];
+            const petal = (id != null && state.petals[id])
+                ? state.petals[id]
+                : state.petals[k];
+            baked.push(bakePetalWords(petal));
+        }
+        const inSlot = new Set(Object.values(ph));
+        for (let i = 0;
+             i < state.petals.length && baked.length < state.n + decoyCount;
+             i++) {
+            if (inSlot.has(i)) continue;
+            baked.push(bakePetalWords(state.petals[i]));
+        }
+        while (baked.length < state.n + decoyCount) {
+            baked.push(['', '', '', '']);
+        }
+    } else {
+        const baseLen = state.n + decoyCount;
+        for (let i = 0; i < baseLen && i < state.petals.length; i++) {
+            baked.push(bakePetalWords(state.petals[i]));
+        }
+    }
     const out = {
         l: state.lang,
         n: state.n,
@@ -1852,6 +1922,10 @@ function renderPlay() {
     r.replaceChildren();
     // Create keeps the pre-populated placements (real petals → slots);
     // play wipes them so the shuffled-tray flow can start fresh.
+    // state.revealed is NOT reset here — restoreGameState may have already
+    // restored it from save and renderPlay would otherwise clobber it.
+    // Fresh-game entry points (playGameFromPayload, loadFromHash, the
+    // create→play handoff) clear state.revealed themselves.
     if (!createMode) {
         state.placements = {};
         state.trayPositions = {};
@@ -1904,8 +1978,43 @@ function renderPlay() {
             style: 'background:#1e4d29;border-color:#133018;color:#fff;',
             onclick: () => commit(() => {
                 state.createMode = false;
-                // Drop cluegiver-only helpers before handing off to play.
-                state.petals.length = state.n + (state.e || 0);
+                // Re-build state.petals from the cluegiver's placements so the
+                // in-memory play session matches the payload just saved by
+                // gamePayload(): slot k → state.placements[k]'s petal (baked
+                // with its rotation), followed by e decoy petals from whatever
+                // the cluegiver left in the tray. Trimming the original array
+                // to n+e wasn't enough — a helper swapped into a slot lived
+                // past index n+e and would be lost, leaking the original
+                // petal at that index into the player's game.
+                const ph = state.placements || {};
+                const rebuilt = [];
+                for (let k = 0; k < state.n; k++) {
+                    const id = ph[k];
+                    const src = (id != null && state.petals[id])
+                        ? state.petals[id]
+                        : state.petals[k];
+                    rebuilt.push({ id: k, words: bakePetalWords(src), rotation: 0 });
+                }
+                const inSlot = new Set(Object.values(ph));
+                const decoyCount = state.e || 0;
+                for (let i = 0;
+                     i < state.petals.length && rebuilt.length < state.n + decoyCount;
+                     i++) {
+                    if (inSlot.has(i)) continue;
+                    rebuilt.push({
+                        id: rebuilt.length,
+                        words: bakePetalWords(state.petals[i]),
+                        rotation: 0,
+                    });
+                }
+                while (rebuilt.length < state.n + decoyCount) {
+                    rebuilt.push({
+                        id: rebuilt.length,
+                        words: ['', '', '', ''],
+                        rotation: 0,
+                    });
+                }
+                state.petals = rebuilt;
                 state.placements = {};
                 state.trayPositions = {};
                 state.cluePlacements = {};
@@ -2704,6 +2813,9 @@ function updateTryCounter() {
 // Lock-in is only enabled once every flower slot has a petal-card in it.
 // In extreme mode every clue badge must also be filled with a chip.
 // After Reveal (state.revealed) the puzzle is over — Submit stays disabled.
+// When disabled, the label is blanked so the button reads as a clearly
+// inactive shape instead of a barely-dimmed "Submit" (which the user
+// keeps trying to click).
 function updateLockInButtonState() {
     const btn = document.getElementById('btn-lockin');
     if (btn) {
@@ -2783,6 +2895,10 @@ function lockInGuess() {
         && Object.keys(state.cluePlacements || {}).length === state.n);
     if (petalsAllRight && cluesAllRight) {
         markGameDone(gamePayload());
+        // Solved by the player — same "game over" state as Reveal: Submit
+        // greyed, Reveal morphed to Exit. Persists across reload via
+        // state.revealed.
+        markGameFinished();
         showAllCorrectModal();
     } else {
         // Score line: petals correct (always shown). Extreme adds clue score.
@@ -2834,7 +2950,10 @@ function showAllCorrectModal() {
             overlay.remove();
             state.placements = {};
             state.trayPositions = {};
+            state.cluePlacements = {};
+            state.cluePositions = {};
             state.tries = 0;
+            state.revealed = false;
             try { localStorage.removeItem(GAME_STATE_KEY); } catch {}
             if (location.hash) {
                 history.replaceState({ screen: 'setup' }, '',
@@ -2855,42 +2974,154 @@ function showAllCorrectModal() {
 // then morph the Reveal button into an Exit button that returns to the
 // main menu (clearing the saved game and any share-URL hash). Extreme mode
 // also snaps each clue chip into its matching badge.
-function doReveal() {
-    for (let i = 0; i < state.n; i++) {
-        state.petals[i].rotation = 0;
-        state.petalRot[i] = 0;
-        const card = document.querySelector(`.petal-card[data-petal-id="${i}"]`);
-        if (card) window.refreshPetalCard(card, state.petals[i]);
-        placePetal(i, i);
-    }
-    if (state.extreme) {
-        for (let i = 0; i < state.n; i++) placeClue(i, i);
-    }
-    markGameDone(gamePayload());
-    // Lock the "revealed" status so subsequent updateLockInButtonState calls
-    // (triggered by any post-reveal drag) keep Submit disabled.
-    state.revealed = true;
-    saveGameState();
+//
+// Placements stagger across REVEAL_TOTAL_MS so the player sees the puzzle
+// assemble itself one item at a time instead of snapping instantly. Each
+// placePetal/placeClue call already has its own ~0.28s slot-snap transition;
+// the stagger spreads the start times across the 2 s window. Submit + the
+// morphed Exit button are disabled until the animation finishes.
+// Morph the Reveal button into an Exit button. Shared by doReveal (post-
+// animation) and restoreGameState (on reload of an already-revealed game),
+// so both paths produce the same exit-the-game behavior.
+function morphRevealToExit(disabled) {
+    const btn = document.getElementById('btn-reveal');
+    if (!btn) return;
+    btn.textContent = t('exit');
+    btn.disabled = !!disabled;
+    btn.onclick = () => {
+        state.placements = {};
+        state.trayPositions = {};
+        state.cluePlacements = {};
+        state.cluePositions = {};
+        state.tries = 0;
+        state.revealed = false;
+        try { localStorage.removeItem(GAME_STATE_KEY); } catch {}
+        if (location.hash) {
+            history.replaceState({ screen: 'setup' }, '',
+                location.pathname + location.search);
+        }
+        navigate('setup');
+    };
+}
 
+// Mark the game as "finished" — Submit stays greyed and the Reveal button
+// becomes Exit. Triggered by both Reveal (player gives up) and a successful
+// Lock-in (player solved it). State.revealed is the single source of truth
+// so reloading the page restores the finished UI.
+function markGameFinished() {
+    state.revealed = true;
     const submitBtn = document.getElementById('btn-lockin');
     if (submitBtn) submitBtn.disabled = true;
+    morphRevealToExit(false);
+    saveGameState();
+}
 
-    const btn = document.getElementById('btn-reveal');
-    if (btn) {
-        btn.textContent = t('exit');
-        btn.disabled = false;
-        btn.onclick = () => {
-            state.placements = {};
-            state.trayPositions = {};
-            state.tries = 0;
-            try { localStorage.removeItem(GAME_STATE_KEY); } catch {}
-            if (location.hash) {
-                history.replaceState({ screen: 'setup' }, '',
-                    location.pathname + location.search);
-            }
-            navigate('setup');
+// 2 s reveal animation — every petal and (extreme-mode) clue chip flies from
+// its current position into its correct slot simultaneously, using the FLIP
+// technique: snap the DOM into its final state, then visually offset back to
+// the original position with an inline `translate`, then transition that
+// translate to (0,0) over REVEAL_TOTAL_MS so the browser animates the move.
+const REVEAL_TOTAL_MS = 2000;
+function doReveal() {
+    // Lock Submit + morph Reveal→Exit right away. Exit is ENABLED so the
+    // user can bail out at any time, even mid-animation.
+    state.revealed = true;
+    const submitBtn = document.getElementById('btn-lockin');
+    if (submitBtn) submitBtn.disabled = true;
+    morphRevealToExit(false);
+
+    const z = getUserZoom() || 1;
+    const animated = [];
+
+    const flyInto = (el) => {
+        // Captures the element's pre-DOM-move screen rect; caller then moves
+        // the DOM, and we apply an inverse translate so the element appears
+        // visually unchanged for one frame. The next frame removes the
+        // translate with a transition, so the browser animates the slide.
+        const startRect = el.getBoundingClientRect();
+        return (finalize) => {
+            const finalRect = el.getBoundingClientRect();
+            const dx = (startRect.left - finalRect.left) / z;
+            const dy = (startRect.top  - finalRect.top)  / z;
+            if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+            el.style.transition = 'none';
+            el.style.transformOrigin = '50% 50%';
+            el.style.transform = `translate(${dx}px, ${dy}px)`;
+            animated.push(el);
+            // Defer the transition kickoff to the next frame so the inverse
+            // transform has been painted before we ask the browser to undo it.
+            requestAnimationFrame(() => {
+                el.style.transition = `transform ${REVEAL_TOTAL_MS}ms cubic-bezier(0.2, 0.7, 0.2, 1)`;
+                el.style.transform = '';
+            });
         };
+    };
+
+    // Extreme mode allows ANY rotational offset r — the player may have
+    // already started laying out a correct-but-rotated solution. Pick the
+    // r that the most placed items agree on (same logic as lockInGuess)
+    // and reveal at THAT offset, so items already in the right spot don't
+    // fly to a different one. Normal mode keeps r = 0 (clue badges fix it).
+    let r = 0;
+    if (state.extreme) {
+        const counts = new Array(state.n).fill(0);
+        for (const sKey of Object.keys(state.placements || {})) {
+            const s = parseInt(sKey, 10);
+            const p = state.placements[sKey];
+            counts[(s - p + state.n) % state.n]++;
+        }
+        for (const bKey of Object.keys(state.cluePlacements || {})) {
+            const b = parseInt(bKey, 10);
+            const c = state.cluePlacements[bKey];
+            counts[(b - c + state.n) % state.n]++;
+        }
+        for (let i = 1; i < state.n; i++) {
+            if (counts[i] > counts[r]) r = i;
+        }
     }
+
+    // Capture every starting rect FIRST (before any DOM moves invalidate
+    // siblings' positions), then move + animate as a second pass. Items
+    // already in their target slot/badge produce a no-op flyInto (the
+    // dx/dy guard in flyInto skips the transform entirely).
+    const movers = [];
+    for (let i = 0; i < state.n; i++) {
+        const targetSlot = (i + r) % state.n;
+        const card = document.querySelector(`.petal-card[data-petal-id="${i}"]`);
+        if (!card) continue;
+        const apply = flyInto(card);
+        state.petals[i].rotation = 0;
+        state.petalRot[i] = 0;
+        window.refreshPetalCard(card, state.petals[i]);
+        // noShift=true → placePetal snaps the card into the slot with no
+        // built-in 0.28 s rotation animation, letting our FLIP transition
+        // own the visual motion uncontested.
+        placePetal(i, targetSlot, undefined, true);
+        movers.push(apply);
+    }
+    if (state.extreme) {
+        for (let i = 0; i < state.n; i++) {
+            const targetBoundary = (i + r) % state.n;
+            const chip = document.querySelector(`.clue-chip[data-clue-idx="${i}"]`);
+            if (!chip) continue;
+            const apply = flyInto(chip);
+            placeClue(i, targetBoundary);
+            movers.push(apply);
+        }
+    }
+    movers.forEach((apply) => apply());
+
+    // After the animation: strip the lingering inline transition + transform
+    // styles, mark the game done, save state. Submit stays disabled (covered
+    // by state.revealed in updateLockInButtonState).
+    setTimeout(() => {
+        animated.forEach((el) => {
+            el.style.transition = '';
+            el.style.transform = '';
+        });
+        markGameDone(gamePayload());
+        markGameFinished();
+    }, REVEAL_TOTAL_MS + 60);
 }
 
 // Modal: confirm before exiting a game in progress.
@@ -3538,11 +3769,31 @@ function makePlayPetal(id) {
         if (prevMode === 'dragging') {
             restoreInline();
             if (cancelled || !e) return;
-            // Drop — find target under the release point.
+            // Drop — find target under the release point. elementFromPoint
+            // demands a pixel-perfect hit on the rotated .flower-slot, and
+            // anywhere the slot's z-index:50 overlaps a free-floating card
+            // we'd also end up burying the card under the slot (slot's
+            // pointer-events then swallow further drags). So if the strict
+            // hit-test misses, snap to the nearest slot whose CENTRE is
+            // within roughly half a card-size of the release point.
             card.style.pointerEvents = 'none';
             const target = document.elementFromPoint(e.clientX, e.clientY);
             card.style.pointerEvents = '';
-            const slotEl = target && target.closest && target.closest('.flower-slot');
+            let slotEl = target && target.closest && target.closest('.flower-slot');
+            if (!slotEl) {
+                const z = getUserZoom() || 1;
+                const SNAP_PX = (state.cardSize * 0.5) * z;
+                let nearest = null;
+                let nearestDist = Infinity;
+                document.querySelectorAll('.flower-slot').forEach((s) => {
+                    const r = s.getBoundingClientRect();
+                    const cx = r.left + r.width  / 2;
+                    const cy = r.top  + r.height / 2;
+                    const d = Math.hypot(e.clientX - cx, e.clientY - cy);
+                    if (d < nearestDist) { nearestDist = d; nearest = s; }
+                });
+                if (nearest && nearestDist < SNAP_PX) slotEl = nearest;
+            }
             if (slotEl) {
                 const slotIdx = parseInt(slotEl.dataset.slot, 10);
                 if (Number.isFinite(slotIdx)) {
@@ -3719,6 +3970,65 @@ function placePetal(petalId, slotIdx, currentAngleDeg, noShift) {
     saveGameState();
 }
 
+// Find a free spot in the play-area for a rect of size (w × h), avoiding
+// the flower stage (slots, badges, board) and every other free-floating
+// card / chip currently sitting in the tray. Mirrors the centre-out scan
+// used by the initial renderPlay layout. Returns play-area-local {x, y},
+// or null if no free spot fits within the visible area.
+function findFreePlayAreaPosition(w, h, ignoreEl) {
+    const playArea = document.getElementById('play-area');
+    if (!playArea) return null;
+    const z = getUserZoom() || 1;
+    const playRect = playArea.getBoundingClientRect();
+    const playW = playRect.width  / z;
+    const playH = playRect.height / z;
+    const localRectOf = (el) => {
+        const r = el.getBoundingClientRect();
+        return {
+            x: (r.left - playRect.left) / z,
+            y: (r.top  - playRect.top)  / z,
+            w: r.width  / z,
+            h: r.height / z,
+        };
+    };
+    const overlaps = (a, b) =>
+        !(a.x + a.w <= b.x || b.x + b.w <= a.x ||
+          a.y + a.h <= b.y || b.y + b.h <= a.y);
+    const obstacles = [];
+    // The flower-board itself is the no-go centre region: slots + badges
+    // are inside it. Cover the whole board rect so a returning card never
+    // lands on the stage even if a particular slot happens to be empty.
+    const boardEl = playArea.querySelector('.flower-board');
+    if (boardEl) obstacles.push(localRectOf(boardEl));
+    // Badges hang outside the board — add them too.
+    playArea.querySelectorAll('.clue-badge').forEach((el) => {
+        obstacles.push(localRectOf(el));
+    });
+    // Other free-floating cards / chips already in the tray.
+    playArea.querySelectorAll('.petal-card, .clue-chip').forEach((el) => {
+        if (el === ignoreEl) return;
+        if (el.parentElement !== playArea) return;  // skip placed items
+        obstacles.push(localRectOf(el));
+    });
+    const Y_STEP = 5, X_STEP = 5;
+    const centerX = (playW - w) / 2;
+    for (let y = 0; y + h <= playH; y += Y_STEP) {
+        const offsets = [0];
+        for (let off = X_STEP; ; off += X_STEP) {
+            const leftOk  = centerX - off >= 0;
+            const rightOk = centerX + off + w <= playW;
+            if (!leftOk && !rightOk) break;
+            if (leftOk)  offsets.push(-off);
+            if (rightOk) offsets.push(off);
+        }
+        for (const x of offsets.map((o) => centerX + o)) {
+            const cand = { x, y, w, h };
+            if (!obstacles.some((o) => overlaps(cand, o))) return { x, y };
+        }
+    }
+    return null;
+}
+
 function returnToTray(petalId) {
     const card = document.querySelector(`.petal-card[data-petal-id="${petalId}"]`);
     if (!card) return;
@@ -3727,11 +4037,16 @@ function returnToTray(petalId) {
     if (prev != null) delete state.placements[prev];
     const area = document.getElementById('play-area');
     if (area) area.appendChild(card);
-    const pos = state.trayPositions[petalId];
-    if (pos) {
-        card.style.left = pos.x + 'px';
-        card.style.top  = pos.y + 'px';
-    }
+    // Always pick a fresh free position — the saved trayPositions entry may
+    // overlap the flower stage (a card placed straight into a slot from
+    // create mode never had a tray position), or a chip / card may have
+    // moved into the saved spot since. Fall back to the saved spot only if
+    // the play-area is so crammed nothing else fits.
+    const free = findFreePlayAreaPosition(state.cardSize, state.cardSize, card);
+    const pos = free || state.trayPositions[petalId] || { x: 10, y: 10 };
+    state.trayPositions[petalId] = pos;
+    card.style.left = pos.x + 'px';
+    card.style.top  = pos.y + 'px';
     requestAnimationFrame(() => window.fitCardWords(card));
     updateLockInButtonState();
     saveGameState();
@@ -3855,7 +4170,23 @@ function makeClueChip(idx) {
         chip.style.pointerEvents = 'none';
         const target = document.elementFromPoint(e.clientX, e.clientY);
         chip.style.pointerEvents = '';
-        const badgeEl = target && target.closest && target.closest('.clue-badge');
+        let badgeEl = target && target.closest && target.closest('.clue-badge');
+        if (!badgeEl) {
+            // Same snap-to-nearest tolerance as petal cards: badges are
+            // small, rotated, and easy to miss by a few pixels on touch.
+            const zoomEff = getUserZoom() || 1;
+            const SNAP_PX = ((state.clueChipW || state.cardSize) * 0.5) * zoomEff;
+            let nearest = null;
+            let nearestDist = Infinity;
+            document.querySelectorAll('.clue-badge').forEach((b) => {
+                const r = b.getBoundingClientRect();
+                const cx = r.left + r.width  / 2;
+                const cy = r.top  + r.height / 2;
+                const d = Math.hypot(e.clientX - cx, e.clientY - cy);
+                if (d < nearestDist) { nearestDist = d; nearest = b; }
+            });
+            if (nearest && nearestDist < SNAP_PX) badgeEl = nearest;
+        }
         const boundary = badgeEl ? parseInt(badgeEl.dataset.boundary, 10) : NaN;
         if (Number.isFinite(boundary)) {
             placeClue(idx, boundary);
@@ -3936,13 +4267,18 @@ function returnClueToTray(clueIdx) {
     chip.style.position = 'absolute';
     // Reset to the canonical tray size — the chip was at the badge's 100%/100%
     // while placed, which can differ from the tray size if the badge stretched.
-    if (state.clueChipW) chip.style.width  = state.clueChipW + 'px';
-    if (state.clueChipH) chip.style.height = state.clueChipH + 'px';
-    const pos = (state.cluePositions || {})[clueIdx];
-    if (pos) {
-        chip.style.left = pos.x + 'px';
-        chip.style.top  = pos.y + 'px';
-    }
+    const cw = state.clueChipW || chip.offsetWidth;
+    const ch = state.clueChipH || chip.offsetHeight;
+    if (state.clueChipW) chip.style.width  = cw + 'px';
+    if (state.clueChipH) chip.style.height = ch + 'px';
+    // Same anti-overlap layout as returnToTray: avoid the flower stage,
+    // every other tray item, and the original saved spot if it now conflicts.
+    state.cluePositions = state.cluePositions || {};
+    const free = findFreePlayAreaPosition(cw, ch, chip);
+    const pos = free || state.cluePositions[clueIdx] || { x: 10, y: 10 };
+    state.cluePositions[clueIdx] = pos;
+    chip.style.left = pos.x + 'px';
+    chip.style.top  = pos.y + 'px';
     updateLockInButtonState();
     saveGameState();
 }
@@ -4018,11 +4354,35 @@ window.addEventListener('DOMContentLoaded', () => {
     // re-render path skips it on purpose.)
     state.zoom = 1;
     state.userZoom = 1;
+    // Boot order:
+    //   1. If a URL hash carries a game AND the saved game state describes
+    //      the same game (same lang/n/seed/petals/clues/extreme), prefer the
+    //      SAVED state — that carries the player's progress (placements,
+    //      revealed, tries). Without this, reloading a hash URL throws away
+    //      progress because loadFromHash always resets to a fresh game.
+    //   2. Otherwise, hash-load as a fresh game.
+    //   3. Otherwise, restore saved-only.
+    //   4. Otherwise, setup screen.
+    const hashGame = decodeState();
+    const saved = loadGameState();
+    const hashKey = hashGame ? JSON.stringify([
+        hashGame.l || DEFAULT_LANG, hashGame.n, hashGame.s || 1,
+        hashGame.p, hashGame.c, hashGame.x ? 1 : 0,
+    ]) : null;
+    const savedKey = saved ? JSON.stringify([
+        saved.lang || DEFAULT_LANG, saved.n, saved.shuffleSeed || 1,
+        saved.petals.map((p) => (p && p.words) || p),
+        saved.clues, saved.extreme ? 1 : 0,
+    ]) : null;
+    if (hashKey && savedKey && hashKey === savedKey) {
+        history.replaceState({ screen: saved.screen }, '', location.href);
+        restoreGameState(saved);
+        return;
+    }
     if (loadFromHash()) {
         history.replaceState({ screen: 'play' }, '', location.href);
         return;
     }
-    const saved = loadGameState();
     if (saved) {
         history.replaceState({ screen: saved.screen }, '', location.href);
         restoreGameState(saved);
