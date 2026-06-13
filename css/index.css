@@ -1308,15 +1308,21 @@ body[data-screen="play"] .flower-slot { overflow: visible; }
     flex-wrap: wrap;
 }
 
-.simple-dialog-btn {
-    /* Pinned to the bottom-centre of the viewport — unaffected by play-area
-       scroll or CSS zoom. Sits above the page on its own layer so the
-       cluegiver can always reach it. */
+/* The create-screen action row is pinned to the bottom-centre of the
+   viewport — unaffected by play-area scroll or CSS zoom — so the cluegiver
+   can always reach Simple-dialog and Fill-with-AI. */
+.create-toolbar-actions {
     position: fixed;
     left: 50%;
     bottom: 1rem;
     transform: translateX(-50%);
     z-index: 1500;
+    display: flex;
+    gap: 0.5rem;
+    pointer-events: auto;
+}
+.simple-dialog-btn,
+.ai-fill-clues-btn {
     font-weight: 700;
     padding: 0.45rem 1.1rem;
     background: rgba(255, 255, 255, 0.95);
@@ -1324,13 +1330,10 @@ body[data-screen="play"] .flower-slot { overflow: visible; }
     border: 1px solid rgba(30, 77, 41, 0.45);
     border-radius: 999px;
     box-shadow: var(--shadow-md);
-    pointer-events: auto;
 }
-/* Preserve the translateX(-50%) centering on :active — without this the
-   generic .btn:active rule overrides transform and the button jumps right
-   by half its width on tap. */
-.simple-dialog-btn:active:not(:disabled) {
-    transform: translateX(-50%) translateY(1px);
+.ai-fill-clues-btn:disabled {
+    opacity: 0.6;
+    cursor: progress;
 }
 
 /* The info modal restores the popup-box's vertical padding that the

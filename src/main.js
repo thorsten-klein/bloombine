@@ -1512,6 +1512,127 @@ function commit(then) {
     then();
 }
 
+// ----- AI clue fill (Google Gemini 2.5 Flash) -----
+// For each boundary k, the cluegiver needs a single word that associates with
+// BOTH boundary words (slot k's right edge + slot k+1's left edge). We ask
+// Gemini Flash 2.5 in one structured-JSON call.
+const AI_KEY_STORAGE = 'bloombine.gemini.apiKey.v1';
+const AI_MODEL = 'gemini-2.5-flash';
+
+function getAiApiKey() {
+    let key = '';
+    try { key = localStorage.getItem(AI_KEY_STORAGE) || ''; } catch {}
+    if (key) return key;
+    const entered = window.prompt(t('aiKeyPrompt'), '');
+    if (!entered || !entered.trim()) return '';
+    key = entered.trim();
+    try { localStorage.setItem(AI_KEY_STORAGE, key); } catch {}
+    return key;
+}
+
+async function fillCluesWithAI() {
+    const btn = document.getElementById('btn-ai-fill-clues');
+    const langName = (LANGS[state.lang] && LANGS[state.lang].name) || state.lang;
+
+    // Collect (left, right) boundary word pairs for every boundary k.
+    const ph = state.placements || {};
+    const pairs = [];
+    for (let k = 0; k < state.n; k++) {
+        const id1 = ph[k];
+        const id2 = ph[(k + 1) % state.n];
+        const p1 = (id1 != null && state.petals[id1]) ? state.petals[id1] : state.petals[k];
+        const p2 = (id2 != null && state.petals[id2]) ? state.petals[id2]
+            : state.petals[(k + 1) % state.n];
+        if (!p1 || !p2) {
+            showBanner(t('fillCluesAiFailed', { m: 'missing petals' }), true);
+            return;
+        }
+        const w1 = bakePetalWords(p1);
+        const w2 = bakePetalWords(p2);
+        pairs.push({ boundary: k + 1, left: w1[1], right: w2[3] });
+    }
+
+    const key = getAiApiKey();
+    if (!key) { showBanner(t('aiKeyMissing'), true); return; }
+
+    const prompt = ''
+        + 'You are helping author in Codenames game in ' + langName + '. '
+        + 'give ONE single clue word that STRONGLY associates with BOTH given words and the user can draw conclusion to BOTH words when just reading your clue word:\n'
+        + pairs.map(p => `${p.boundary}. "${p.left}" + "${p.right}"`).join('\n')
+        + '\n\nReturn STRICT JSON: an array of objects {"boundary": <number>, '
+        + '"clue": "<one ' + langName + ' word>"}, in the same order, '
+        + 'length ' + pairs.length + '. No prose, no markdown.';
+
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+        + AI_MODEL + ':generateContent?key=' + encodeURIComponent(key);
+    const body = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+            temperature: 0.7,
+            responseMimeType: 'application/json',
+            responseSchema: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: {
+                        boundary: { type: 'INTEGER' },
+                        clue: { type: 'STRING' },
+                    },
+                    required: ['boundary', 'clue'],
+                },
+            },
+        },
+    };
+
+    const prevLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = t('fillCluesAiWorking'); }
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+            const text = await resp.text().catch(() => '');
+            // 400/403 most often means a bad key — clear it so the next try
+            // re-prompts instead of silently failing again.
+            if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
+                try { localStorage.removeItem(AI_KEY_STORAGE); } catch {}
+            }
+            throw new Error('HTTP ' + resp.status + ' ' + text.slice(0, 200));
+        }
+        const data = await resp.json();
+        const txt = (((data.candidates || [])[0] || {}).content || {}).parts;
+        const raw = (txt && txt[0] && txt[0].text) || '';
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error('non-array response');
+
+        let filled = 0;
+        for (const item of parsed) {
+            const k = (Number(item.boundary) | 0) - 1;
+            const clue = String(item.clue || '').trim();
+            if (k < 0 || k >= state.n || !clue) continue;
+            const left = (pairs[k].left || '').toLowerCase();
+            const right = (pairs[k].right || '').toLowerCase();
+            const low = clue.toLowerCase();
+            // Skip clues that contain a boundary word — same rule as commit().
+            if ((left && low.includes(left)) || (right && low.includes(right))) continue;
+            state.clues[k] = clue;
+            const inp = document.querySelector(
+                `.clue-badge[data-boundary="${k}"] .clue-text-input`);
+            if (inp) { inp.value = clue; inp.classList.remove('invalid'); }
+            filled++;
+        }
+        updatePlayButtonState();
+        saveGameState();
+        showBanner(t('fillCluesAiDone', { c: filled }));
+    } catch (err) {
+        showBanner(t('fillCluesAiFailed', { m: String(err.message || err) }), true);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prevLabel || t('fillCluesAi'); }
+    }
+}
+
 // ----- game set (collection of committed games) -----
 const GAME_SET_KEY = 'bloombine.gameSet.v1';
 function loadGameSet() {
@@ -2046,10 +2167,17 @@ function renderPlay() {
     // In create: a "Simple dialog" button (focused single-boundary clue
     // editor) + zoom — same horizontal-bar layout.
     const tryEl = createMode
-        ? el('button', {
-            class: 'btn simple-dialog-btn', type: 'button',
-            onclick: () => openSimpleDialog(0),
-        }, t('simpleDialog'))
+        ? el('div', { class: 'create-toolbar-actions' },
+            el('button', {
+                class: 'btn simple-dialog-btn', type: 'button',
+                onclick: () => openSimpleDialog(0),
+            }, t('simpleDialog')),
+            el('button', {
+                class: 'btn ai-fill-clues-btn', type: 'button',
+                id: 'btn-ai-fill-clues',
+                onclick: () => fillCluesWithAI(),
+            }, t('fillCluesAi')),
+        )
         : el('div', { class: 'try-counter', id: 'try-counter' },
             t('tries', { c: (state.tries || 0) + 1 }));
     const zoomOutBtn = el('button', {
